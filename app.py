@@ -1,4 +1,3 @@
-
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -32,7 +31,7 @@ def get_polygon_vertices(cx, cy, r, n_sides, angle_deg=0):
     return vertices
 
 # --- Funkcija za generiranje DXF ---
-def ustvari_dxf(oblika, params, konture_vzorca=None, luknje=None):
+def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, luknje=None):
     doc = ezdxf.new('R2010')
     msp = doc.modelspace()
     
@@ -56,6 +55,13 @@ def ustvari_dxf(oblika, params, konture_vzorca=None, luknje=None):
         dx = h * math.tan(math.radians(kot))
         tacke_stopnic = [(0, 0), (w, 0), (w + dx, h), (dx, h), (0, 0)]
         msp.add_lwpolyline(tacke_stopnic, dxfattribs={'layer': 'RAZREZ'})
+    elif oblika == "Skica s papirja (Kamera / Slika)" and kontura_skice_plosce is not None:
+        tacke = []
+        for pt in kontura_skice_plosce:
+            tacke.append((float(pt[0][0]), float(pt[0][1])))
+        if len(tacke) > 2:
+            tacke.append(tacke[0])
+            msp.add_lwpolyline(tacke, dxfattribs={'layer': 'RAZREZ'})
 
     # 2. Vzorec
     if konture_vzorca is not None:
@@ -104,7 +110,6 @@ def ustvari_dxf(oblika, params, konture_vzorca=None, luknje=None):
 # --- Main UI ---
 st.title("🛠️ Moja Delavnica App - CAD Generator")
 
-# Stranski meni za navigacijo
 modul = st.sidebar.radio("Navigacija:", ["Domača stran", "CAD / DXF Generator", "Lovske kamere & AI", "Tehnična diagnostika"])
 
 if modul == "Domača stran":
@@ -116,9 +121,18 @@ elif modul == "CAD / DXF Generator":
     
     col_o1, col_o2 = st.columns([1, 2])
     
+    kontura_skice_plosce = None
+    mejna_sirina, mejna_visina = 1000.0, 1000.0
+    
     with col_o1:
         st.subheader("1. Oblika in dimenzije plošče")
-        oblika_plosce = st.selectbox("Izberi obliko plošče:", ["Pravokotna", "Okrogla", "Trapezasta", "Stopniščna (pod kotom)"])
+        oblika_plosce = st.selectbox("Izberi obliko plošče:", [
+            "Pravokotna", 
+            "Okrogla", 
+            "Trapezasta", 
+            "Stopniščna (pod kotom)",
+            "Skica s papirja (Kamera / Slika)"
+        ])
         
         params = {}
         if oblika_plosce == "Pravokotna":
@@ -146,18 +160,45 @@ elif modul == "CAD / DXF Generator":
             mejna_sirina = params['w'] + abs(dx)
             mejna_visina = params['h']
 
+        elif oblika_plosce == "Skica s papirja (Kamera / Slika)":
+            st.info("Slikajte ali naložite skico zunanje konture plošče.")
+            vir_skice = st.radio("Zajem skice plošče:", ["Slikaj s kamero 📷", "Naloži datoteko 📁"])
+            
+            slika_plosce_obj = None
+            if vir_skice == "Slikaj s kamero 📷":
+                foto = st.camera_input("Posnemi zunanjo skico plošče:")
+                if foto: slika_plosce_obj = Image.open(foto).convert('RGB')
+            else:
+                fajl = st.file_uploader("Naloži sliko skice plošče...", type=["jpg", "jpeg", "png"])
+                if fajl: slika_plosce_obj = Image.open(fajl).convert('RGB')
+                
+            if slika_plosce_obj is not None:
+                zaznana_w = st.number_input("Dejanska širina plošče v mm (kalibracija):", value=1000.0, step=50.0)
+                zaznana_h = st.number_input("Dejanska višina plošče v mm (kalibracija):", value=800.0, step=50.0)
+                mejna_sirina, mejna_visina = zaznana_w, zaznana_h
+                
+                thresh_p = st.slider("Prag zaznavanja roba (Threshold)", 0, 255, 127)
+                
+                img_np = np.array(slika_plosce_obj)
+                gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                _, thresh = cv2.threshold(gray, thresh_p, 255, cv2.THRESH_BINARY_INV)
+                konture, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                if konture:
+                    najvecja = max(konture, key=cv2.contourArea)
+                    h_img, w_img = gray.shape
+                    k_scaled = najvecja.astype(np.float32)
+                    k_scaled[:, 0, 0] = (k_scaled[:, 0, 0] / w_img) * zaznana_w
+                    k_scaled[:, 0, 1] = ((h_img - k_scaled[:, 0, 1]) / h_img) * zaznana_h
+                    kontura_skice_plosce = k_scaled
+
     with col_o2:
         st.subheader("2. Dodajanje in urejanje lukenj")
         c_l1, c_l2, c_l3 = st.columns([2, 2, 1])
         with c_l1:
             tip_l = st.selectbox("Tip izreza:", [
-                "Okrogla", 
-                "Štirikotna", 
-                "Ovalna (utor)", 
-                "Trikotna", 
-                "Šestkotna", 
-                "Osemkotna", 
-                "Poljuben N-kotnik"
+                "Okrogla", "Štirikotna", "Ovalna (utor)", 
+                "Trikotna", "Šestkotna", "Osemkotna", "Poljuben N-kotnik"
             ])
             pos_x_l = st.number_input("X pozicija (mm)", value=float(mejna_sirina/2), step=10.0)
             pos_y_l = st.number_input("Y pozicija (mm)", value=float(mejna_visina/2), step=10.0)
@@ -174,16 +215,13 @@ elif modul == "CAD / DXF Generator":
                 h_l = st.number_input("Višina izreza (mm)", value=30.0, step=5.0)
                 r_l = min(w_l, h_l) / 2.0
             else:
-                if tip_l == "Trikotna":
-                    n_stranic = 3
-                elif tip_l == "Šestkotna":
-                    n_stranic = 6
-                elif tip_l == "Osemkotna":
-                    n_stranic = 8
+                if tip_l == "Trikotna": n_stranic = 3
+                elif tip_l == "Šestkotna": n_stranic = 6
+                elif tip_l == "Osemkotna": n_stranic = 8
                 elif tip_l == "Poljuben N-kotnik":
                     n_stranic = st.number_input("Število oglišč N", min_value=3, max_value=20, value=5)
                 
-                r_l = st.number_input("Polmer opisanega kroga R (mm)", value=25.0, step=2.5)
+                r_l = st.number_input("Polmer R (mm)", value=25.0, step=2.5)
                 w_l, h_l = r_l * 2, r_l * 2
 
         with c_l3:
@@ -191,18 +229,12 @@ elif modul == "CAD / DXF Generator":
             st.write(" ")
             if st.button("➕ Dodaj luknjo"):
                 st.session_state.seznami_lukenj.append({
-                    'tip': tip_l, 
-                    'x': pos_x_l, 
-                    'y': pos_y_l, 
-                    'r': r_l, 
-                    'w': w_l, 
-                    'h': h_l,
-                    'kot': kot_rotacije,
-                    'n_stranic': n_stranic
+                    'tip': tip_l, 'x': pos_x_l, 'y': pos_y_l, 
+                    'r': r_l, 'w': w_l, 'h': h_l,
+                    'kot': kot_rotacije, 'n_stranic': n_stranic
                 })
                 st.rerun()
 
-        # Prikaz in brisanje lukenj
         if st.session_state.seznami_lukenj:
             st.write("**Dodane luknje:**")
             col_clear, _ = st.columns([1, 3])
@@ -221,37 +253,24 @@ elif modul == "CAD / DXF Generator":
                         st.rerun()
 
     st.markdown("---")
-    st.subheader("3. Dodajanje vzorca / skice")
-    dodaj_vzorec = st.checkbox("Dodaj vzorec ali skico na ploščo", value=False)
+    st.subheader("3. Dodajanje notranjega vzorca (opcijsko)")
+    dodaj_vzorec = st.checkbox("Dodaj vzorec na površino plošče", value=False)
     
     skalirane_konture = None
     if dodaj_vzorec:
         shranjene_datoteke = [f for f in os.listdir(MAPA_VZORCEV) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        
-        izbira_vzorca = st.radio("Vir vzorca / skice:", [
-            "Slikaj skico s kamero 📷", 
-            "Naloži sliko iz naprave 📁", 
-            "Izberi shranjen vzorec 💾"
-        ])
+        izbira_vzorca = st.radio("Vir vzorca:", ["Slikaj s kamero 📷", "Naloži sliko 📁", "Izberi shranjeno 💾"])
         
         slika_objekt = None
-        
-        if izbira_vzorca == "Slikaj skico s kamero 📷":
-            kamera_foto = st.camera_input("Posnemi fotografijo skice s papirja:")
-            if kamera_foto is not None:
-                slika_objekt = Image.open(kamera_foto).convert('RGB')
-                
-        elif izbira_vzorca == "Naloži sliko iz naprave 📁":
-            slika_v = st.file_uploader("Naloži sliko skice ali vzorca...", type=["jpg", "jpeg", "png"])
-            if slika_v:
-                slika_objekt = Image.open(slika_v).convert('RGB')
-                
-        elif izbira_vzorca == "Izberi shranjen vzorec 💾":
-            if shranjene_datoteke:
-                izbran_fajl = st.selectbox("Izberi shranjen vzorec:", shranjene_datoteke)
-                slika_objekt = Image.open(os.path.join(MAPA_VZORCEV, izbran_fajl)).convert('RGB')
-            else:
-                st.info("V mapi 'shranjeni_vzorci' trenutno ni datotek.")
+        if izbira_vzorca == "Slikaj s kamero 📷":
+            kamera_foto = st.camera_input("Posnemi fotografijo vzorca:")
+            if kamera_foto: slika_objekt = Image.open(kamera_foto).convert('RGB')
+        elif izbira_vzorca == "Naloži sliko 📁":
+            slika_v = st.file_uploader("Naloži sliko vzorca...", type=["jpg", "jpeg", "png"])
+            if slika_v: slika_objekt = Image.open(slika_v).convert('RGB')
+        elif izbira_vzorca == "Izberi shranjeno 💾" and shranjene_datoteke:
+            izbran_fajl = st.selectbox("Izberi vzorec:", shranjene_datoteke)
+            slika_objekt = Image.open(os.path.join(MAPA_VZORCEV, izbran_fajl)).convert('RGB')
 
         if slika_objekt is not None:
             c_v1, c_v2 = st.columns(2)
@@ -261,9 +280,9 @@ elif modul == "CAD / DXF Generator":
                 pos_x = st.number_input("Odmik X (mm)", value=float((mejna_sirina - v_sirina)/2), step=5.0)
                 pos_y = st.number_input("Odmik Y (mm)", value=float((mejna_visina - v_visina)/2), step=5.0)
             with c_v2:
-                thresh_val = st.slider("Občutljivost (Threshold)", 0, 255, 127)
-                min_area = st.slider("Min. površina (Filtriranje smeti)", 10, 5000, 200)
-                obrni_barve = st.checkbox("Invertiraj barve vzorca")
+                thresh_val = st.slider("Občutljivost vzorca", 0, 255, 127)
+                min_area = st.slider("Min. površina", 10, 5000, 200)
+                obrni_barve = st.checkbox("Invertiraj barve")
 
             img_np = np.array(slika_objekt)
             gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
@@ -285,7 +304,7 @@ elif modul == "CAD / DXF Generator":
     
     fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
     
-    # Izris zunanjega roba glede na obliko
+    # Izris zunanjega roba plošče
     if oblika_plosce == "Pravokotna":
         zunanji_lik = patches.Rectangle((0, 0), params['w'], params['h'], linewidth=2, edgecolor='black', facecolor='#e6f2ff')
         ax.add_patch(zunanji_lik)
@@ -301,12 +320,13 @@ elif modul == "CAD / DXF Generator":
         tacke = [[0, 0], [params['w'], 0], [params['w'] + dx, params['h']], [dx, params['h']]]
         zunanji_lik = patches.Polygon(tacke, closed=True, linewidth=2, edgecolor='black', facecolor='#e6f2ff')
         ax.add_patch(zunanji_lik)
+    elif oblika_plosce == "Skica s papirja (Kamera / Slika)" and kontura_skice_plosce is not None:
+        pts = kontura_skice_plosce.reshape(-1, 2)
+        ax.plot(pts[:, 0], pts[:, 1], color='black', linewidth=2)
 
-    # Izris lukenj z označenimi številkami (#1, #2 ...)
+    # Izris lukenj
     for idx, l in enumerate(st.session_state.seznami_lukenj):
-        tip = l['tip']
-        x, y = l['x'], l['y']
-        kot = l.get('kot', 0)
+        tip, x, y, kot = l['tip'], l['x'], l['y'], l.get('kot', 0)
         
         if tip == 'Okrogla':
             p = patches.Circle((x, y), l['r'], edgecolor='green', facecolor='white', linewidth=1.5)
@@ -323,10 +343,9 @@ elif modul == "CAD / DXF Generator":
             p = patches.Polygon(pts, closed=True, edgecolor='green', facecolor='white', linewidth=1.5)
             ax.add_patch(p)
 
-        # Izpis številke luknje ob središču (#1, #2, ...)
         ax.text(x, y, f"#{idx+1}", color='blue', fontsize=10, fontweight='bold', ha='center', va='center')
 
-    # Izris vzorca / skice
+    # Izris vzorca
     if skalirane_konture is not None:
         for kontura in skalirane_konture:
             pts = kontura.reshape(-1, 2)
@@ -342,11 +361,11 @@ elif modul == "CAD / DXF Generator":
     st.pyplot(fig, use_container_width=True)
 
     # Izvoz DXF
-    dxf_data = ustvari_dxf(oblika_plosce, params, skalirane_konture, st.session_state.seznami_lukenj)
+    dxf_data = ustvari_dxf(oblika_plosce, params, kontura_skice_plosce, skalirane_konture, st.session_state.seznami_lukenj)
     st.download_button(
-        label=f"💾 Prenesi DXF datoteko ({oblika_plosce} plošča)",
+        label=f"💾 Prenesi DXF datoteko ({oblika_plosce})",
         data=dxf_data,
-        file_name=f"plosca_{oblika_plosce.lower()}.dxf",
+        file_name="plosca_skica.dxf",
         mime="application/dxf"
     )
 
