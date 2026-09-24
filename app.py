@@ -1,4 +1,5 @@
 import streamlit as st
+import base64
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
