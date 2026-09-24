@@ -46,7 +46,7 @@ def ai_analiza_skice_z_gemini(slika_pil, api_key):
         Vse dimenzije pretvori v milimetre (mm). Če so v metrih (m), pomnoži s 1000.
         """
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-1.5-flash',
             contents=[slika_pil, prompt]
         )
         clean_json = response.text.replace("```json", "").replace("```", "").strip()
@@ -57,14 +57,8 @@ def ai_analiza_skice_z_gemini(slika_pil, api_key):
 
 # --- AI Funkcija za segmentacijo vzorca ograje s terena ---
 def ai_obdelava_vzorca_ograje(slika_pil, api_key):
-    """AI očisti sliko ograje s terena (odstrani ozadje, sence, travo)."""
     try:
         client = genai.Client(api_key=api_key)
-        prompt = """
-        To je slika ograje s terena. Analiziraj vzorec ograje.
-        Vrni navodila za kontrastno masko ali opiši samo geometrijo vzorca.
-        """
-        # Za napredno vektrizacijo vzorca sliko pripravimo z adaptivnim pragovanjem:
         img_np = np.array(slika_pil.convert('L'))
         blurred = cv2.GaussianBlur(img_np, (5, 5), 0)
         thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
@@ -93,11 +87,11 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
     doc.layers.add(name="VZOREC", color=1)
     doc.layers.add(name="LUKNJE", color=3)
 
-    if oblika == "Pravokotna":
-        w, h = params['w'], params['h']
+    if oblika in ["Pravokotna", "Skica s papirja (Slikaj z AI)"]:
+        w, h = params.get('w', 1500), params.get('h', 1000)
         msp.add_lwpolyline([(0, 0), (w, 0), (w, h), (0, h), (0, 0)], dxfattribs={'layer': 'RAZREZ'})
     elif oblika == "Okrogla":
-        d = params['d']
+        d = params.get('d', 1000)
         msp.add_circle((d/2, d/2), d/2, dxfattribs={'layer': 'RAZREZ'})
     elif oblika == "Trapezasta":
         w1, w2, h, x_offset = params['w1'], params['w2'], params['h'], params['x_offset']
@@ -152,7 +146,6 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
 # --- Main UI ---
 st.title("🛠️ Moja Delavnica App - CAD & AI Generator")
 
-# Nastavitev API ključa v stranski vrstici
 st.sidebar.header("🔑 AI Nastavitve")
 gemini_api_key = st.sidebar.text_input("Vnesite Gemini API ključ:", type="password")
 
@@ -165,7 +158,6 @@ elif modul == "CAD / DXF Generator":
     st.header("📐 Konstrukcija in razrez plošče")
     
     col_o1, col_o2 = st.columns([1, 2])
-    mejna_sirina, mejna_visina = 1000.0, 1000.0
     
     with col_o1:
         st.subheader("1. Oblika in dimenzije plošče")
@@ -178,38 +170,40 @@ elif modul == "CAD / DXF Generator":
         ])
         
         params = {}
-        if oblika_plosce == "Pravokotna":
-            params['w'] = st.number_input("Širina L1 (mm):", value=st.session_state.get('sirina_ai', 1500.0), step=1.0)
-            params['h'] = st.number_input("Višina L2 (mm):", value=st.session_state.get('visina_ai', 1000.0), step=1.0)
+        if oblika_plosce in ["Pravokotna", "Skica s papirja (Slikaj z AI)"]:
+            default_w = st.session_state.get('sirina_ai', 1500.0)
+            default_h = st.session_state.get('visina_ai', 1000.0)
+            params['w'] = st.number_input("Širina (mm):", value=default_w, step=10.0)
+            params['h'] = st.number_input("Višina (mm):", value=default_h, step=10.0)
             mejna_sirina, mejna_visina = params['w'], params['h']
             
-        elif oblika_plosce == "Okrogla":
-            params['d'] = st.number_input("Premer plošče D (mm):", value=1000.0, step=1.0)
-            mejna_sirina, mejna_visina = params['d'], params['d']
+            if oblika_plosce == "Skica s papirja (Slikaj z AI)":
+                fajl_plosce = st.file_uploader("📷 Slikaj / Naloži skico...", type=["jpg", "jpeg", "png"])
+                if fajl_plosce and gemini_api_key:
+                    slika_obj = Image.open(fajl_plosce).convert('RGB')
+                    if st.button("🤖 Analiziraj skico z AI"):
+                        with st.spinner("AI analizira dimenzije in luknje..."):
+                            rez = ai_analiza_skice_z_gemini(slika_obj, gemini_api_key)
+                            if rez:
+                                st.session_state.sirina_ai = float(rez.get('sirina_mm', 1500))
+                                st.session_state.visina_ai = float(rez.get('visina_mm', 1000))
+                                st.session_state.seznami_lukenj = []
+                                for l in rez.get('luknje', []):
+                                    st.session_state.seznami_lukenj.append({
+                                        'tip': l.get('tip', 'Okrogla'),
+                                        'x': float(l.get('x_mm', 100)),
+                                        'y': float(l.get('y_mm', 100)),
+                                        'r': float(l.get('premer_mm', 20)) / 2.0,
+                                        'w': float(l.get('premer_mm', 20)),
+                                        'h': float(l.get('premer_mm', 20)),
+                                        'kot': 0, 'n_stranic': 6
+                                    })
+                                st.success("AI uspešno prebral skico!")
+                                st.rerun()
 
-        elif oblika_plosce == "Skica s papirja (Slikaj z AI)":
-            fajl_plosce = st.file_uploader("📷 Slikaj / Naloži skico...", type=["jpg", "jpeg", "png"])
-            if fajl_plosce and gemini_api_key:
-                slika_obj = Image.open(fajl_plosce).convert('RGB')
-                if st.button("🤖 Analiziraj skico z AI"):
-                    with st.spinner("AI analizira dimenzije in luknje..."):
-                        rez = ai_analiza_skice_z_gemini(slika_obj, gemini_api_key)
-                        if rez:
-                            st.session_state.sirina_ai = float(rez.get('sirina_mm', 1500))
-                            st.session_state.visina_ai = float(rez.get('visina_mm', 1000))
-                            st.session_state.seznami_lukenj = []
-                            for l in rez.get('luknje', []):
-                                st.session_state.seznami_lukenj.append({
-                                    'tip': l.get('tip', 'Okrogla'),
-                                    'x': float(l.get('x_mm', 100)),
-                                    'y': float(l.get('y_mm', 100)),
-                                    'r': float(l.get('premer_mm', 20)) / 2.0,
-                                    'w': float(l.get('premer_mm', 20)),
-                                    'h': float(l.get('premer_mm', 20)),
-                                    'kot': 0, 'n_stranic': 6
-                                })
-                            st.success("AI uspešno prebral skico!")
-                            st.rerun()
+        elif oblika_plosce == "Okrogla":
+            params['d'] = st.number_input("Premer plošče D (mm):", value=1000.0, step=10.0)
+            mejna_sirina, mejna_visina = params['d'], params['d']
 
     with col_o2:
         st.subheader("2. Dodajanje in urejanje lukenj")
@@ -246,7 +240,6 @@ elif modul == "CAD / DXF Generator":
             with c_v2:
                 thresh_val = st.slider("Prag zaznavanja linij ograje", 0, 255, 120)
 
-            # Obdelava slike ograje z AI / OpenCV
             img_np = np.array(slika_ograj_obj)
             gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
             blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -260,7 +253,7 @@ elif modul == "CAD / DXF Generator":
             pos_y = (mejna_visina - v_visina) / 2
             
             for k in konture:
-                if cv2.contourArea(k) > 150: # filtriramo majhen šum z ozadja
+                if cv2.contourArea(k) > 150:
                     k_scaled = k.astype(np.float32)
                     k_scaled[:, 0, 0] = pos_x + (k_scaled[:, 0, 0] / w_img) * v_sirina
                     k_scaled[:, 0, 1] = pos_y + ((h_img - k_scaled[:, 0, 1]) / h_img) * v_visina
