@@ -10,7 +10,7 @@ from PIL import Image
 import os
 import math
 import json
-from google import genai
+from openai import OpenAI
 
 st.set_page_config(page_title="Moja Delavnica", page_icon="🛠️", layout="wide")
 
@@ -22,15 +22,22 @@ if not os.path.exists(MAPA_VZORCEV):
 if 'seznami_lukenj' not in st.session_state:
     st.session_state.seznami_lukenj = []
 
-# --- AI Funkcija za prepoznavo skice (z novim google-genai SDK) ---
-def ai_analiza_skice_z_gemini(slika_pil, api_key):
+# --- AI Funkcija za prepoznavo skice z OpenAI (GPT-4o) ---
+def ai_analiza_skice_z_gpt(slika_pil, api_key):
     try:
-        client = genai.Client(api_key=api_key)
+        client = OpenAI(api_key=api_key)
+        
+        # Pretvorba PIL slike v base64 za OpenAI API
+        import base64
+        buffered = io.BytesIO()
+        slika_pil.save(buffered, format="JPEG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+
         prompt = """
         Analiziraj to ročno narisano skico za laserski izrez plošče.
         Preberi vse dimenzije, napise in narisane luknje.
         
-        Vrni IZKLJUČNO veljaven JSON v naslednjem formatu (brez dodatnega besedila ali markdowna):
+        Vrni IZKLJUČNO veljaven JSON v naslednjem formatu (brez dodatnega besedila ali markdowna, samo čisti JSON):
         {
           "sirina_mm": 1500,
           "visina_mm": 1000,
@@ -45,21 +52,28 @@ def ai_analiza_skice_z_gemini(slika_pil, api_key):
         }
         Vse dimenzije pretvori v milimetre (mm). Če so v metrih (m), pomnoži s 1000.
         """
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=[slika_pil, prompt]
-            )
-        except Exception:
-            response = client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=[slika_pil, prompt]
-            )
 
-        clean_json = response.text.replace("```json", "").replace("```", "").strip()
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{img_str}"},
+                        },
+                    ],
+                }
+            ],
+            max_tokens=1000,
+        )
+
+        clean_json = response.choices[0].message.content.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_json)
     except Exception as e:
-        st.error(f"Napaka pri AI analizi skice: {e}")
+        st.error(f"Napaka pri AI analizi skice s GPT-4o: {e}")
         return None
 
 # --- Pomožna funkcija za oglišča N-kotnika ---
@@ -139,18 +153,18 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
     return stream.getvalue()
 
 # --- Main UI ---
-st.title("🛠️ Moja Delavnica App - CAD & AI Generator")
+st.title("🛠️ Moja Delavnica App - CAD & GPT-4o Generator")
 
-# Pridobivanje ključa iz Secrets
-gemini_api_key = st.secrets.get("GEMINI_API_KEY", "")
-if not gemini_api_key:
-    st.sidebar.header("🔑 AI Nastavitve")
-    gemini_api_key = st.sidebar.text_input("Vnesite Gemini API ključ:", type="password")
+# Pridobivanje OpenAI ključa iz Secrets
+openai_api_key = st.secrets.get("OPENAI_API_KEY", "")
+if not openai_api_key:
+    st.sidebar.header("🔑 OpenAI Nastavitve")
+    openai_api_key = st.sidebar.text_input("Vnesite OpenAI API ključ (sk-...):", type="password")
 
 modul = st.sidebar.radio("Navigacija:", ["Domača stran", "CAD / DXF Generator", "Lovske kamere & AI", "Tehnična diagnostika"])
 
 if modul == "Domača stran":
-    st.success("Sistem deluje in je pripravljen za uporabo!")
+    st.success("Sistem deluje z OpenAI pogonom in je pripravljen!")
 
 elif modul == "CAD / DXF Generator":
     st.header("📐 Konstrukcija in razrez plošče")
@@ -177,11 +191,11 @@ elif modul == "CAD / DXF Generator":
             
             if oblika_plosce == "Skica s papirja (Slikaj z AI)":
                 fajl_plosce = st.file_uploader("📷 Slikaj / Naloži skico...", type=["jpg", "jpeg", "png"])
-                if fajl_plosce and gemini_api_key:
+                if fajl_plosce and openai_api_key:
                     slika_obj = Image.open(fajl_plosce).convert('RGB')
-                    if st.button("🤖 Analiziraj skico z AI"):
-                        with st.spinner("AI analizira dimenzije in luknje..."):
-                            rez = ai_analiza_skice_z_gemini(slika_obj, gemini_api_key)
+                    if st.button("🤖 Analiziraj skico z GPT-4o"):
+                        with st.spinner("GPT-4o analizira dimenzije in luknje..."):
+                            rez = ai_analiza_skice_z_gpt(slika_obj, openai_api_key)
                             if rez:
                                 st.session_state.sirina_ai = float(rez.get('sirina_mm', 1500))
                                 st.session_state.visina_ai = float(rez.get('visina_mm', 1000))
@@ -196,7 +210,7 @@ elif modul == "CAD / DXF Generator":
                                         'h': float(l.get('premer_mm', 20)),
                                         'kot': 0, 'n_stranic': 6
                                     })
-                                st.success("AI uspešno prebral skico!")
+                                st.success("GPT-4o uspešno prebral skico!")
                                 st.rerun()
 
         elif oblika_plosce == "Okrogla":
@@ -222,7 +236,7 @@ elif modul == "CAD / DXF Generator":
                 st.rerun()
 
     st.markdown("---")
-    st.subheader("3. Dodajanje vzorca ograje s terena (AI Prepoznava)")
+    st.subheader("3. Dodajanje vzorca ograje s terena")
     dodaj_vzorec = st.checkbox("Dodaj vzorec ograje s terena", value=False)
     
     skalirane_konture = None
@@ -262,16 +276,13 @@ elif modul == "CAD / DXF Generator":
     
     fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
     
-    # Izris plošče
     zunanji_lik = patches.Rectangle((0, 0), params.get('w', 1500), params.get('h', 1000), linewidth=2, edgecolor='black', facecolor='#e6f2ff')
     ax.add_patch(zunanji_lik)
 
-    # Izris lukenj
     for idx, l in enumerate(st.session_state.seznami_lukenj):
         ax.add_patch(patches.Circle((l['x'], l['y']), l['r'], edgecolor='green', facecolor='white', linewidth=1.5))
         ax.text(l['x'], l['y'], f"#{idx+1}", color='blue', fontsize=10, fontweight='bold', ha='center', va='center')
 
-    # Izris vzorca ograje
     if skalirane_konture is not None:
         for kontura in skalirane_konture:
             pts = kontura.reshape(-1, 2)
@@ -282,6 +293,5 @@ elif modul == "CAD / DXF Generator":
     ax.set_aspect('equal')
     st.pyplot(fig, use_container_width=True)
 
-    # DXF Izvoz
     dxf_data = ustvari_dxf(oblika_plosce, params, None, skalirane_konture, st.session_state.seznami_lukenj)
     st.download_button("💾 Prenesi DXF datoteko za razrez", data=dxf_data, file_name="ogreja_razrez.dxf", mime="application/dxf")
