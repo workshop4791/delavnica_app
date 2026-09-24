@@ -8,8 +8,14 @@ import io
 import cv2
 import numpy as np
 from PIL import Image
+import os
 
-st.set_page_config(page_title="Moja Delavnica", page_icon="🛠️", layout="centered")
+st.set_page_config(page_title="Moja Delavnica", page_icon="🛠️", layout="wide")
+
+# Map za trajno shranjevanje vzorcev
+MAPA_VZORCEV = "shranjeni_vzorci"
+if not os.path.exists(MAPA_VZORCEV):
+    os.makedirs(MAPA_VZORCEV)
 
 # --- Funkcija za generiranje DXF z vzorcem ---
 def ustvari_dxf_z_vzorcem(sirina, visina, konture_vzorca=None):
@@ -25,7 +31,7 @@ def ustvari_dxf_z_vzorcem(sirina, visina, konture_vzorca=None):
         dxfattribs={'layer': 'RAZREZ'}
     )
     
-    # Če imamo izrisane konture vzorca, jih pretvorimo v DXF linije
+    # Prepis kontur vzorca v DXF linije
     if konture_vzorca is not None:
         for kontura in konture_vzorca:
             tacke = []
@@ -53,23 +59,16 @@ TEXTS = {
         "material": "Material:",
         "inner_radius": "Notranji radij krivljenja R (mm):",
         "bend_angle": "Kot upogiba (°):",
-        "v_die_rec": "Priporočena V-matrica (8xt):",
         "plate_dims": "Dimenzije plošče",
         "width": "Širina plošče L1 (mm):",
         "height": "Višina / Krak L2 (mm):",
-        "hole_diam": "Premer lukenj (mm):",
-        "hole_offset": "Odmik lukenj od roba (mm):",
-        "flat_length": "Dodatek za krivljenje / Razvita dolžina:",
         "download_dxf": "💾 Prenesi pravi DXF za razrez",
         "sketch_title": "Fotografiraj ročno skico",
-        "sketch_info": "Posnemi ali naloži sliko skice z merami.",
         "upload_sketch": "Naloži skico...",
         "pattern_title": "Vzorci in ograjni paneli",
-        "pattern_info": "Naloži sliko vzorca za vektorizacijo in izrez na ploščo.",
-        "upload_pattern": "Naloži sliko vzorca...",
-        "panel_width": "Širina panela (mm):",
-        "panel_height": "Višina panela (mm):",
-        "apply_pattern": "Združi vzorec in ploščo"
+        "pattern_info": "Naloži ali izberi vzorec za izrez na ploščo.",
+        "panel_width": "Širina plošče (mm):",
+        "panel_height": "Višina plošče (mm):"
     }
 }
 
@@ -111,55 +110,135 @@ elif modul == t["modules"][1]:
         st.subheader(t["pattern_title"])
         st.write(t["pattern_info"])
         
-        col1, col2 = st.columns(2)
-        with col1:
+        st.markdown("### 1. Dimenzije osnovne plošče")
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
             p_sirina = st.number_input(t["panel_width"], value=1000, step=50)
-        with col2:
+        with col_p2:
             p_visina = st.number_input(t["panel_height"], value=500, step=50)
             
-        slika_vzorca = st.file_uploader(t["upload_pattern"], type=["jpg", "jpeg", "png"], key="vzorec")
+        st.markdown("---")
+        st.markdown("### 2. Izbor ali nalaganje vzorca")
         
-        if slika_vzorca:
-            # Pretvorba slike v numpy matriko za OpenCV processing
-            img = Image.open(slika_vzorca).convert('RGB')
-            img_np = np.array(img)
+        # Pridobivanje shranjenih vzorcev
+        shranjene_datoteke = [f for f in os.listdir(MAPA_VZORCEV) if f.endswith(('.png', '.jpg', '.jpeg'))]
+        
+        izbira_vzorca = st.radio("Kako želiš izbrati vzorec?", ["Naloži novo sliko", "Izberi shranjen vzorec iz zbirke"])
+        
+        slika_objekt = None
+        
+        if izbira_vzorca == "Naloži novo sliko":
+            slika_vzorca = st.file_uploader("Naloži sliko vzorca...", type=["jpg", "jpeg", "png"], key="vzorec_upload")
+            if slika_vzorca:
+                slika_objekt = Image.open(slika_vzorca).convert('RGB')
+                
+                # Možnost za shranjevanje v zbirko
+                col_s1, col_s2 = st.columns([2, 1])
+                with col_s1:
+                    novo_ime = st.text_input("Ime vzorca za shranjevanje (npr. 'roža_v1'):", "")
+                with col_s2:
+                    st.write(" ")
+                    st.write(" ")
+                    if st.button("💾 Shrani v zbirko") and novo_ime:
+                        pot_shranjevanja = os.path.join(MAPA_VZORCEV, f"{novo_ime}.png")
+                        slika_objekt.save(pot_shranjevanja)
+                        st.success(f"Vzorec '{novo_ime}' shranjen!")
+                        st.rerun()
+                    
+        else:
+            if shranjene_datoteke:
+                col_z1, col_z2 = st.columns([3, 1])
+                with col_z1:
+                    izbran_fajl = st.selectbox("Izberi vzorec iz zbirke:", shranjene_datoteke)
+                with col_z2:
+                    st.write(" ")
+                    st.write(" ")
+                    if st.button("🗑️ Izbriši ta vzorec"):
+                        pot_za_bris = os.path.join(MAPA_VZORCEV, izbran_fajl)
+                        if os.path.exists(pot_za_bris):
+                            os.remove(pot_za_bris)
+                            st.warning(f"Vzorec '{izbran_fajl}' je bil izbrisan!")
+                            st.rerun()
+                
+                if izbran_fajl:
+                    pot = os.path.join(MAPA_VZORCEV, izbran_fajl)
+                    slika_objekt = Image.open(pot).convert('RGB')
+            else:
+                st.info("V zbirki še nimaš shranjenih vzorcev. Najprej naloži novo sliko.")
+
+        if slika_objekt is not None:
+            st.markdown("---")
+            st.markdown("### 3. Nastavitve velikosti, položaja in čiščenja vzorca")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**Dimenzije in položaj vzorca na plošči:**")
+                v_sirina = st.number_input("Širina vzorca (mm)", value=float(p_sirina - 100), min_value=1.0, max_value=float(p_sirina), step=10.0)
+                v_visina = st.number_input("Višina vzorca (mm)", value=float(p_visina - 100), min_value=1.0, max_value=float(p_visina), step=10.0)
+                
+                sredina_x = (p_sirina - v_sirina) / 2.0
+                sredina_y = (p_visina - v_visina) / 2.0
+                
+                pos_x = st.number_input("Odmik vzorca od levega roba X (mm)", value=float(sredina_x), min_value=0.0, max_value=float(p_sirina - v_sirina), step=5.0)
+                pos_y = st.number_input("Odmik vzorca od spodnjega roba Y (mm)", value=float(sredina_y), min_value=0.0, max_value=float(p_visina - v_visina), step=5.0)
+
+            with c2:
+                st.write("**Čiščenje nečistoč na sliki:**")
+                thresh_val = st.slider("Občutljivost zaznavanja (Threshold)", 0, 255, 127)
+                min_area = st.slider("Odstrani majhne smeti (Minimalna površina)", 10, 5000, 200)
+                obrni_barve = st.checkbox("Obrni barve (Invertiraj vzorec)")
+
+            # Pretvorba v sivinsko sliko
+            img_np = np.array(slika_objekt)
             gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
             
-            # Pragovna detekcija (threshold)
-            _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+            # Razločevanje ozadja in vzorca
+            mode = cv2.THRESH_BINARY_INV if not obrni_barve else cv2.THRESH_BINARY
+            _, thresh = cv2.threshold(gray, thresh_val, 255, mode)
+            
             konture, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
             
-            # Prilagoditev dimenzij kontur na velikost panela
+            # Filtriranje in prilagoditev merilu/položaju
             h_img, w_img = gray.shape
+            
             skalirane_konture = []
             for k in konture:
-                k_scaled = k.astype(np.float32)
-                k_scaled[:, 0, 0] = (k_scaled[:, 0, 0] / w_img) * p_sirina
-                k_scaled[:, 0, 1] = ((h_img - k_scaled[:, 0, 1]) / h_img) * p_visina # Obrnjena Y os
-                skalirane_konture.append(k_scaled)
+                if cv2.contourArea(k) >= min_area:
+                    k_scaled = k.astype(np.float32)
+                    k_scaled[:, 0, 0] = pos_x + (k_scaled[:, 0, 0] / w_img) * v_sirina
+                    k_scaled[:, 0, 1] = pos_y + ((h_img - k_scaled[:, 0, 1]) / h_img) * v_visina
+                    skalirane_konture.append(k_scaled)
 
-            st.success("✅ Vzorec uspešno prepoznan in preračunan na dimenzije plošče!")
+            st.markdown("---")
+            st.markdown("### 4. Povečan predogled izreza")
             
-            # Prikaz predogleda
-            fig, ax = plt.subplots(figsize=(6, 3))
-            rect = patches.Rectangle((0, 0), p_sirina, p_visina, linewidth=2, edgecolor='black', facecolor='none')
+            # Povečan predogled
+            fig, ax = plt.subplots(figsize=(12, 6), dpi=150)
+            
+            # Zunanja plošča
+            rect = patches.Rectangle((0, 0), p_sirina, p_visina, linewidth=2, edgecolor='black', facecolor='#f0f0f0')
             ax.add_patch(rect)
             
+            # Risanje vzorca
             for kontura in skalirane_konture:
                 pts = kontura.reshape(-1, 2)
-                ax.plot(pts[:, 0], pts[:, 1], color='red', linewidth=1)
+                ax.plot(pts[:, 0], pts[:, 1], color='red', linewidth=1.2)
                 
-            ax.set_xlim(-20, p_sirina + 20)
-            ax.set_ylim(-20, p_visina + 20)
+            ax.set_xlim(-50, p_sirina + 50)
+            ax.set_ylim(-50, p_visina + 50)
+            ax.set_xlabel("X (mm)")
+            ax.set_ylabel("Y (mm)")
+            ax.grid(True, linestyle=':', alpha=0.6)
             ax.set_aspect('equal')
-            st.pyplot(fig)
             
-            # DXF prenos
+            st.pyplot(fig, use_container_width=True)
+            
+            # Prenos DXF
             dxf_vzorec = ustvari_dxf_z_vzorcem(p_sirina, p_visina, skalirane_konture)
             st.download_button(
-                label="💾 Prenesi DXF z integriranim vzorcem",
+                label="💾 Prenesi očiščen DXF z merami",
                 data=dxf_vzorec,
-                file_name=f"panel_z_vzorcem_{int(p_sirina)}x{int(p_visina)}mm.dxf",
+                file_name=f"panel_{int(p_sirina)}x{int(p_visina)}mm.dxf",
                 mime="application/dxf"
             )
 
