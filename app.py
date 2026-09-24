@@ -260,7 +260,7 @@ elif modul == "CAD / DXF Generator":
     st.markdown("---")
     st.subheader("4. CAD Predogled v realnem času")
     
-    fig, ax = plt.subplots(figsize=(10, 5), dpi50=150) # popravljeno na dpi=150
+    fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
     
     # Izris plošče
     zunanji_lik = patches.Rectangle((0, 0), params.get('w', 1500), params.get('h', 1000), linewidth=2, edgecolor='black', facecolor='#e6f2ff')
