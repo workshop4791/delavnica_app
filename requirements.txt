@@ -1,3 +1,6 @@
 streamlit
 matplotlib
 ezdxf
+opencv-python-headless
+numpy
+Pillow
