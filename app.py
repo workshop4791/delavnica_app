@@ -78,7 +78,6 @@ def ustvari_dxf(oblika, params, konture_vzorca=None, luknje=None):
                 msp.add_circle((x, y), l['r'], dxfattribs={'layer': 'LUKNJE'})
             elif tip == 'Štirikotna':
                 w_l, h_l = l['w'], l['h']
-                # Izračun oglišč z rotacijo
                 rad = math.radians(kot)
                 hw, hh = w_l / 2.0, h_l / 2.0
                 pts = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
@@ -223,21 +222,36 @@ elif modul == "CAD / DXF Generator":
 
     st.markdown("---")
     st.subheader("3. Dodajanje vzorca / skice")
-    dodaj_vzorec = st.checkbox("Dodaj vzorec na ploščo", value=False)
+    dodaj_vzorec = st.checkbox("Dodaj vzorec ali skico na ploščo", value=False)
     
     skalirane_konture = None
     if dodaj_vzorec:
         shranjene_datoteke = [f for f in os.listdir(MAPA_VZORCEV) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        izbira_vzorca = st.radio("Vir vzorca:", ["Izberi shranjen vzorec", "Naloži novo sliko"])
+        
+        izbira_vzorca = st.radio("Vir vzorca / skice:", [
+            "Slikaj skico s kamero 📷", 
+            "Naloži sliko iz naprave 📁", 
+            "Izberi shranjen vzorec 💾"
+        ])
         
         slika_objekt = None
-        if izbira_vzorca == "Izberi shranjen vzorec" and shranjene_datoteke:
-            izbran_fajl = st.selectbox("Izberi vzorec:", shranjene_datoteke)
-            slika_objekt = Image.open(os.path.join(MAPA_VZORCEV, izbran_fajl)).convert('RGB')
-        else:
-            slika_v = st.file_uploader("Naloži sliko vzorca...", type=["jpg", "jpeg", "png"])
+        
+        if izbira_vzorca == "Slikaj skico s kamero 📷":
+            kamera_foto = st.camera_input("Posnemi fotografijo skice s papirja:")
+            if kamera_foto is not None:
+                slika_objekt = Image.open(kamera_foto).convert('RGB')
+                
+        elif izbira_vzorca == "Naloži sliko iz naprave 📁":
+            slika_v = st.file_uploader("Naloži sliko skice ali vzorca...", type=["jpg", "jpeg", "png"])
             if slika_v:
                 slika_objekt = Image.open(slika_v).convert('RGB')
+                
+        elif izbira_vzorca == "Izberi shranjen vzorec 💾":
+            if shranjene_datoteke:
+                izbran_fajl = st.selectbox("Izberi shranjen vzorec:", shranjene_datoteke)
+                slika_objekt = Image.open(os.path.join(MAPA_VZORCEV, izbran_fajl)).convert('RGB')
+            else:
+                st.info("V mapi 'shranjeni_vzorci' trenutno ni datotek.")
 
         if slika_objekt is not None:
             c_v1, c_v2 = st.columns(2)
@@ -298,11 +312,7 @@ elif modul == "CAD / DXF Generator":
             p = patches.Circle((x, y), l['r'], edgecolor='green', facecolor='white', linewidth=1.5)
             ax.add_patch(p)
         elif tip == 'Štirikotna':
-            ts = patches.Rectangle((-l['w']/2, -l['h']/2), l['w'], l['h'], facecolor='white', edgecolor='green', linewidth=1.5)
-            t_start = ax.transData
-            t_rot = patches.transforms.Affine2D().rotate_deg_around(x, y, kot) + t_start
             p = patches.Rectangle((x - l['w']/2, y - l['h']/2), l['w'], l['h'], edgecolor='green', facecolor='white', linewidth=1.5)
-            # Rotacija patcha
             p.set_transform(patches.transforms.Affine2D().rotate_deg_around(x, y, kot) + ax.transData)
             ax.add_patch(p)
         elif tip == 'Ovalna (utor)':
@@ -316,7 +326,7 @@ elif modul == "CAD / DXF Generator":
         # Izpis številke luknje ob središču (#1, #2, ...)
         ax.text(x, y, f"#{idx+1}", color='blue', fontsize=10, fontweight='bold', ha='center', va='center')
 
-    # Izris vzorca
+    # Izris vzorca / skice
     if skalirane_konture is not None:
         for kontura in skalirane_konture:
             pts = kontura.reshape(-1, 2)
