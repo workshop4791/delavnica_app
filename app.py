@@ -1,4 +1,3 @@
-
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -203,14 +202,14 @@ elif modul == t["modules"][1]:
         st.write(t["sketch_info"])
         slika_skice = st.file_uploader(t["upload_sketch"], type=["jpg", "jpeg", "png"], key="skica")
         if slika_skice:
-            st.image(slika_skice, caption="Naložena skica", use_column_width=True)
+            st.image(slika_skice, caption="Naložena skica", use_container_width=True)
 
     with zavihek3:
         st.subheader(t["pattern_title"])
         st.write(t["pattern_info"])
         slika_vzorca = st.file_uploader(t["upload_pattern"], type=["jpg", "jpeg", "png"], key="vzorec")
         if slika_vzorca:
-            st.image(slika_vzorca, caption="Izbrani vzorec", use_column_width=True)
+            st.image(slika_vzorca, caption="Izbrani vzorec", use_container_width=True)
 
 elif modul == t["modules"][2]:
     st.header("🦌 " + t["modules"][2])
