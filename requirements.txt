@@ -1,7 +1,8 @@
+
 streamlit
 matplotlib
 ezdxf
 opencv-python-headless
 numpy
 Pillow
-google-generativeai
+google-genai
