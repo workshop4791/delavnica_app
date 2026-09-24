@@ -165,10 +165,7 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
 st.title("🛠️ Moja Delavnica App - CAD & GPT-4o Generator")
 
 # Pridobivanje OpenAI ključa iz Secrets ali stranskega menija
-openai_api_key = st.secrets.get("OPENAI_API_KEY", "")
-if not openai_api_key:
-    st.sidebar.header("🔑 OpenAI Nastavitve")
-    openai_api_key = st.sidebar.text_input("Vnesite OpenAI API ključ (sk-...):", type="password")
+openai_api_key = "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"
 
 modul = st.sidebar.radio("Navigacija:", ["Domača stran", "CAD / DXF Generator", "Lovske kamere & AI", "Tehnična diagnostika"])
 
