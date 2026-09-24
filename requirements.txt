@@ -1,8 +1,2 @@
-
+openai
 streamlit
-matplotlib
-ezdxf
-opencv-python-headless
-numpy
-Pillow
-google-genai
