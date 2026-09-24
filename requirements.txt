@@ -4,4 +4,4 @@ ezdxf
 opencv-python-headless
 numpy
 Pillow
-google-genai
+google-generativeai
