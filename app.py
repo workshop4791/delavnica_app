@@ -1,3 +1,4 @@
+
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -161,23 +162,27 @@ elif modul == "CAD / DXF Generator":
             mejna_visina = params['h']
 
         elif oblika_plosce == "Skica s papirja (Kamera / Slika)":
-            st.info("Slikajte ali naložite skico zunanje konture plošče.")
-            vir_skice = st.radio("Zajem skice plošče:", ["Slikaj s kamero 📷", "Naloži datoteko 📁"])
+            st.write("---")
+            st.markdown("📷 **Slikanje zunanje konture plošče**")
+            vir_skice = st.radio("Način vnesa skice plošče:", ["Slikaj s kamero 📷", "Naloži sliko 📁"], key="vir_skice_plosce")
             
             slika_plosce_obj = None
             if vir_skice == "Slikaj s kamero 📷":
-                foto = st.camera_input("Posnemi zunanjo skico plošče:")
-                if foto: slika_plosce_obj = Image.open(foto).convert('RGB')
+                foto = st.camera_input("Posnemi zunanjo skico plošče:", key="cam_plosca")
+                if foto:
+                    slika_plosce_obj = Image.open(foto).convert('RGB')
             else:
-                fajl = st.file_uploader("Naloži sliko skice plošče...", type=["jpg", "jpeg", "png"])
-                if fajl: slika_plosce_obj = Image.open(fajl).convert('RGB')
+                fajl = st.file_uploader("Naloži sliko skice plošče...", type=["jpg", "jpeg", "png"], key="upload_plosca")
+                if fajl:
+                    slika_plosce_obj = Image.open(fajl).convert('RGB')
                 
             if slika_plosce_obj is not None:
-                zaznana_w = st.number_input("Dejanska širina plošče v mm (kalibracija):", value=1000.0, step=50.0)
-                zaznana_h = st.number_input("Dejanska višina plošče v mm (kalibracija):", value=800.0, step=50.0)
+                st.success("Slika plošče zajeta!")
+                zaznana_w = st.number_input("Širina plošče v mm (kalibracija):", value=1000.0, step=50.0)
+                zaznana_h = st.number_input("Višina plošče v mm (kalibracija):", value=800.0, step=50.0)
                 mejna_sirina, mejna_visina = zaznana_w, zaznana_h
                 
-                thresh_p = st.slider("Prag zaznavanja roba (Threshold)", 0, 255, 127)
+                thresh_p = st.slider("Občutljivost zaznavanja roba", 0, 255, 127)
                 
                 img_np = np.array(slika_plosce_obj)
                 gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
@@ -259,15 +264,17 @@ elif modul == "CAD / DXF Generator":
     skalirane_konture = None
     if dodaj_vzorec:
         shranjene_datoteke = [f for f in os.listdir(MAPA_VZORCEV) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        izbira_vzorca = st.radio("Vir vzorca:", ["Slikaj s kamero 📷", "Naloži sliko 📁", "Izberi shranjeno 💾"])
+        izbira_vzorca = st.radio("Vir vzorca:", ["Slikaj s kamero 📷", "Naloži sliko 📁", "Izberi shranjeno 💾"], key="vir_vzorca_option")
         
         slika_objekt = None
         if izbira_vzorca == "Slikaj s kamero 📷":
-            kamera_foto = st.camera_input("Posnemi fotografijo vzorca:")
-            if kamera_foto: slika_objekt = Image.open(kamera_foto).convert('RGB')
+            kamera_foto = st.camera_input("Posnemi fotografijo vzorca:", key="cam_vzorec")
+            if kamera_foto:
+                slika_objekt = Image.open(kamera_foto).convert('RGB')
         elif izbira_vzorca == "Naloži sliko 📁":
-            slika_v = st.file_uploader("Naloži sliko vzorca...", type=["jpg", "jpeg", "png"])
-            if slika_v: slika_objekt = Image.open(slika_v).convert('RGB')
+            slika_v = st.file_uploader("Naloži sliko vzorca...", type=["jpg", "jpeg", "png"], key="upload_vzorec")
+            if slika_v:
+                slika_objekt = Image.open(slika_v).convert('RGB')
         elif izbira_vzorca == "Izberi shranjeno 💾" and shranjene_datoteke:
             izbran_fajl = st.selectbox("Izberi vzorec:", shranjene_datoteke)
             slika_objekt = Image.open(os.path.join(MAPA_VZORCEV, izbran_fajl)).convert('RGB')
