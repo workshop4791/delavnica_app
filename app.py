@@ -40,7 +40,7 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
     doc.layers.add(name="VZOREC", color=1)
     doc.layers.add(name="LUKNJE", color=3)
 
-    # 1. Zunanji rob plošče glede na obliko
+    # 1. Zunanji rob plošče
     if oblika == "Pravokotna":
         w, h = params['w'], params['h']
         msp.add_lwpolyline([(0, 0), (w, 0), (w, h), (0, h), (0, 0)], dxfattribs={'layer': 'RAZREZ'})
@@ -56,7 +56,7 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
         dx = h * math.tan(math.radians(kot))
         tacke_stopnic = [(0, 0), (w, 0), (w + dx, h), (dx, h), (0, 0)]
         msp.add_lwpolyline(tacke_stopnic, dxfattribs={'layer': 'RAZREZ'})
-    elif oblika == "Skica s papirja (Kamera / Slika)" and kontura_skice_plosce is not None:
+    elif oblika == "Skica s papirja (Slikaj ali Naloži)" and kontura_skice_plosce is not None:
         tacke = []
         for pt in kontura_skice_plosce:
             tacke.append((float(pt[0][0]), float(pt[0][1])))
@@ -132,7 +132,7 @@ elif modul == "CAD / DXF Generator":
             "Okrogla", 
             "Trapezasta", 
             "Stopniščna (pod kotom)",
-            "Skica s papirja (Kamera / Slika)"
+            "Skica s papirja (Slikaj ali Naloži)"
         ])
         
         params = {}
@@ -161,23 +161,15 @@ elif modul == "CAD / DXF Generator":
             mejna_sirina = params['w'] + abs(dx)
             mejna_visina = params['h']
 
-        elif oblika_plosce == "Skica s papirja (Kamera / Slika)":
-            st.write("---")
-            st.markdown("📷 **Slikanje zunanje konture plošče**")
-            vir_skice = st.radio("Način vnesa skice plošče:", ["Slikaj s kamero 📷", "Naloži sliko 📁"], key="vir_skice_plosce")
+        elif oblika_plosce == "Skica s papirja (Slikaj ali Naloži)":
+            st.info("👇 Kliknite spodaj za slikanje s kamero ali nalaganje fotke zunanje skice plošče:")
             
-            slika_plosce_obj = None
-            if vir_skice == "Slikaj s kamero 📷":
-                foto = st.camera_input("Posnemi zunanjo skico plošče:", key="cam_plosca")
-                if foto:
-                    slika_plosce_obj = Image.open(foto).convert('RGB')
-            else:
-                fajl = st.file_uploader("Naloži sliko skice plošče...", type=["jpg", "jpeg", "png"], key="upload_plosca")
-                if fajl:
-                    slika_plosce_obj = Image.open(fajl).convert('RGB')
+            fajl_plosce = st.file_uploader("📷 Slikaj / Naloži skico plošče...", type=["jpg", "jpeg", "png"], key="up_plosca")
+            
+            if fajl_plosce is not None:
+                slika_plosce_obj = Image.open(fajl_plosce).convert('RGB')
+                st.success("Slika plošče uspel naložena!")
                 
-            if slika_plosce_obj is not None:
-                st.success("Slika plošče zajeta!")
                 zaznana_w = st.number_input("Širina plošče v mm (kalibracija):", value=1000.0, step=50.0)
                 zaznana_h = st.number_input("Višina plošče v mm (kalibracija):", value=800.0, step=50.0)
                 mejna_sirina, mejna_visina = zaznana_w, zaznana_h
@@ -264,18 +256,14 @@ elif modul == "CAD / DXF Generator":
     skalirane_konture = None
     if dodaj_vzorec:
         shranjene_datoteke = [f for f in os.listdir(MAPA_VZORCEV) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        izbira_vzorca = st.radio("Vir vzorca:", ["Slikaj s kamero 📷", "Naloži sliko 📁", "Izberi shranjeno 💾"], key="vir_vzorca_option")
+        izbira_vzorca = st.radio("Vir vzorca:", ["📷 Slikaj / Naloži sliko", "💾 Izberi shranjeno"], key="vir_vzorca_option")
         
         slika_objekt = None
-        if izbira_vzorca == "Slikaj s kamero 📷":
-            kamera_foto = st.camera_input("Posnemi fotografijo vzorca:", key="cam_vzorec")
-            if kamera_foto:
-                slika_objekt = Image.open(kamera_foto).convert('RGB')
-        elif izbira_vzorca == "Naloži sliko 📁":
-            slika_v = st.file_uploader("Naloži sliko vzorca...", type=["jpg", "jpeg", "png"], key="upload_vzorec")
+        if izbira_vzorca == "📷 Slikaj / Naloži sliko":
+            slika_v = st.file_uploader("📷 Slikaj ali naloži sliko vzorca...", type=["jpg", "jpeg", "png"], key="upload_vzorec")
             if slika_v:
                 slika_objekt = Image.open(slika_v).convert('RGB')
-        elif izbira_vzorca == "Izberi shranjeno 💾" and shranjene_datoteke:
+        elif izbira_vzorca == "💾 Izberi shranjeno" and shranjene_datoteke:
             izbran_fajl = st.selectbox("Izberi vzorec:", shranjene_datoteke)
             slika_objekt = Image.open(os.path.join(MAPA_VZORCEV, izbran_fajl)).convert('RGB')
 
@@ -327,7 +315,7 @@ elif modul == "CAD / DXF Generator":
         tacke = [[0, 0], [params['w'], 0], [params['w'] + dx, params['h']], [dx, params['h']]]
         zunanji_lik = patches.Polygon(tacke, closed=True, linewidth=2, edgecolor='black', facecolor='#e6f2ff')
         ax.add_patch(zunanji_lik)
-    elif oblika_plosce == "Skica s papirja (Kamera / Slika)" and kontura_skice_plosce is not None:
+    elif oblika_plosce == "Skica s papirja (Slikaj ali Naloži)" and kontura_skice_plosce is not None:
         pts = kontura_skice_plosce.reshape(-1, 2)
         ax.plot(pts[:, 0], pts[:, 1], color='black', linewidth=2)
 
