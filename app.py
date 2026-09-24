@@ -10,7 +10,7 @@ from PIL import Image
 import os
 import math
 import json
-from google import genai
+import google.generativeai as genai
 
 st.set_page_config(page_title="Moja Delavnica", page_icon="🛠️", layout="wide")
 
@@ -25,7 +25,9 @@ if 'seznami_lukenj' not in st.session_state:
 # --- AI Funkcija za prepoznavo skice ---
 def ai_analiza_skice_z_gemini(slika_pil, api_key):
     try:
-        client = genai.Client(api_key=api_key)
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
         prompt = """
         Analiziraj to ročno narisano skico za laserski izrez plošče.
         Preberi vse dimenzije, napise in narisane luknje.
@@ -45,17 +47,8 @@ def ai_analiza_skice_z_gemini(slika_pil, api_key):
         }
         Vse dimenzije pretvori v milimetre (mm). Če so v metrih (m), pomnoži s 1000.
         """
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=[slika_pil, prompt]
-            )
-        except Exception:
-            response = client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=[slika_pil, prompt]
-            )
-
+        
+        response = model.generate_content([prompt, slika_pil])
         clean_json = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_json)
     except Exception as e:
@@ -141,7 +134,7 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
 # --- Main UI ---
 st.title("🛠️ Moja Delavnica App - CAD & AI Generator")
 
-# Pridobivanje ključa samodejno iz Secrets ali iz vnosnega polja
+# Pridobivanje ključa iz Secrets ali vnosnega polja
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "")
 if not gemini_api_key:
     st.sidebar.header("🔑 AI Nastavitve")
