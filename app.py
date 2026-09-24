@@ -1,4 +1,3 @@
-
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -31,6 +30,41 @@ def get_polygon_vertices(cx, cy, r, n_sides, angle_deg=0):
         vertices.append((x, y))
     return vertices
 
+# --- Izboljšan AI / Napredni računalniški vid za analizo skic ---
+def napredna_analiza_skice(slika_pil, zaznana_w, zaznana_h, prag_obcutljivosti=127):
+    img_np = np.array(slika_pil)
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    
+    # 1. Napredno glajenje za odstranitev manjših napisov in šuma
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+    
+    # 2. Adaptivno pragovanje (bolj odporno na sence)
+    thresh = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY_INV, 15, 3
+    )
+    
+    # 3. Morfološko zapiranje za povezavo ročno narisanih črt
+    kernel = np.ones((5, 5), np.uint8)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+    konture, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if konture:
+        # Filtriramo premajhne konture (npr. besedilo, puščice, pike)
+        velike_konture = [k for k in konture if cv2.contourArea(k) > 1000]
+        if velike_konture:
+            najvecja = max(velike_konture, key=cv2.contourArea)
+        else:
+            najvecja = max(konture, key=cv2.contourArea)
+            
+        h_img, w_img = gray.shape
+        k_scaled = najvecja.astype(np.float32)
+        k_scaled[:, 0, 0] = (k_scaled[:, 0, 0] / w_img) * zaznana_w
+        k_scaled[:, 0, 1] = ((h_img - k_scaled[:, 0, 1]) / h_img) * zaznana_h
+        return k_scaled
+    return None
+
 # --- Funkcija za generiranje DXF ---
 def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, luknje=None):
     doc = ezdxf.new('R2010')
@@ -57,9 +91,7 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
         tacke_stopnic = [(0, 0), (w, 0), (w + dx, h), (dx, h), (0, 0)]
         msp.add_lwpolyline(tacke_stopnic, dxfattribs={'layer': 'RAZREZ'})
     elif oblika == "Skica s papirja (Slikaj ali Naloži)" and kontura_skice_plosce is not None:
-        tacke = []
-        for pt in kontura_skice_plosce:
-            tacke.append((float(pt[0][0]), float(pt[0][1])))
+        tacke = [(float(pt[0][0]), float(pt[0][1])) for pt in kontura_skice_plosce]
         if len(tacke) > 2:
             tacke.append(tacke[0])
             msp.add_lwpolyline(tacke, dxfattribs={'layer': 'RAZREZ'})
@@ -67,9 +99,7 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
     # 2. Vzorec
     if konture_vzorca is not None:
         for kontura in konture_vzorca:
-            tacke = []
-            for pt in kontura:
-                tacke.append((float(pt[0][0]), float(pt[0][1])))
+            tacke = [(float(pt[0][0]), float(pt[0][1])) for pt in kontura]
             if len(tacke) > 2:
                 tacke.append(tacke[0])
                 msp.add_lwpolyline(tacke, dxfattribs={'layer': 'VZOREC'})
@@ -136,89 +166,83 @@ elif modul == "CAD / DXF Generator":
         ])
         
         params = {}
+        # POPRAVEK: Vsa vnosna polja imajo sedaj step=1.0 mm (natančno po 1 mm)
         if oblika_plosce == "Pravokotna":
-            params['w'] = st.number_input("Širina L1 (mm):", value=1500.0, step=50.0)
-            params['h'] = st.number_input("Višina L2 (mm):", value=1000.0, step=50.0)
+            params['w'] = st.number_input("Širina L1 (mm):", value=1500.0, step=1.0)
+            params['h'] = st.number_input("Višina L2 (mm):", value=1000.0, step=1.0)
             mejna_sirina, mejna_visina = params['w'], params['h']
             
         elif oblika_plosce == "Okrogla":
-            params['d'] = st.number_input("Premer plošče D (mm):", value=1000.0, step=50.0)
+            params['d'] = st.number_input("Premer plošče D (mm):", value=1000.0, step=1.0)
             mejna_sirina, mejna_visina = params['d'], params['d']
             
         elif oblika_plosce == "Trapezasta":
-            params['w1'] = st.number_input("Spodnja širina W1 (mm):", value=1500.0, step=50.0)
-            params['w2'] = st.number_input("Zgornja širina W2 (mm):", value=1000.0, step=50.0)
-            params['h'] = st.number_input("Višina H (mm):", value=800.0, step=50.0)
-            params['x_offset'] = st.number_input("Odmik zgornjega robova X (mm):", value=250.0, step=25.0)
+            params['w1'] = st.number_input("Spodnja širina W1 (mm):", value=1500.0, step=1.0)
+            params['w2'] = st.number_input("Zgornja širina W2 (mm):", value=1000.0, step=1.0)
+            params['h'] = st.number_input("Višina H (mm):", value=800.0, step=1.0)
+            params['x_offset'] = st.number_input("Odmik zgornjega robova X (mm):", value=250.0, step=1.0)
             mejna_sirina = max(params['w1'], params['x_offset'] + params['w2'])
             mejna_visina = params['h']
 
         elif oblika_plosce == "Stopniščna (pod kotom)":
-            params['w'] = st.number_input("Širina plošče W (mm):", value=1200.0, step=50.0)
-            params['h'] = st.number_input("Višina plošče H (mm):", value=900.0, step=50.0)
+            params['w'] = st.number_input("Širina plošče W (mm):", value=1200.0, step=1.0)
+            params['h'] = st.number_input("Višina plošče H (mm):", value=900.0, step=1.0)
             params['kot'] = st.slider("Kot naklona (° stopinje):", min_value=-60.0, max_value=60.0, value=35.0, step=0.5)
             dx = params['h'] * math.tan(math.radians(params['kot']))
             mejna_sirina = params['w'] + abs(dx)
             mejna_visina = params['h']
 
         elif oblika_plosce == "Skica s papirja (Slikaj ali Naloži)":
-            st.info("👇 Kliknite spodaj za slikanje s kamero ali nalaganje fotke zunanje skice plošče:")
-            
+            st.info("👇 Kliknite spodaj za slikanje ali nalaganje skice plošče:")
             fajl_plosce = st.file_uploader("📷 Slikaj / Naloži skico plošče...", type=["jpg", "jpeg", "png"], key="up_plosca")
             
             if fajl_plosce is not None:
                 slika_plosce_obj = Image.open(fajl_plosce).convert('RGB')
-                st.success("Slika plošče uspel naložena!")
+                st.success("Slika plošče uspešno naložena!")
                 
-                zaznana_w = st.number_input("Širina plošče v mm (kalibracija):", value=1000.0, step=50.0)
-                zaznana_h = st.number_input("Višina plošče v mm (kalibracija):", value=800.0, step=50.0)
+                zaznana_w = st.number_input("Širina plošče v mm (kalibracija):", value=1500.0, step=1.0)
+                zaznana_h = st.number_input("Višina plošče v mm (kalibracija):", value=1000.0, step=1.0)
                 mejna_sirina, mejna_visina = zaznana_w, zaznana_h
                 
                 thresh_p = st.slider("Občutljivost zaznavanja roba", 0, 255, 127)
-                
-                img_np = np.array(slika_plosce_obj)
-                gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-                _, thresh = cv2.threshold(gray, thresh_p, 255, cv2.THRESH_BINARY_INV)
-                konture, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                if konture:
-                    najvecja = max(konture, key=cv2.contourArea)
-                    h_img, w_img = gray.shape
-                    k_scaled = najvecja.astype(np.float32)
-                    k_scaled[:, 0, 0] = (k_scaled[:, 0, 0] / w_img) * zaznana_w
-                    k_scaled[:, 0, 1] = ((h_img - k_scaled[:, 0, 1]) / h_img) * zaznana_h
-                    kontura_skice_plosce = k_scaled
+                kontura_skice_plosce = napredna_analiza_skice(slika_plosce_obj, zaznana_w, zaznana_h, thresh_p)
 
     with col_o2:
         st.subheader("2. Dodajanje in urejanje lukenj")
+        
+        # Prikaz pametnega opozorila za poševne robove
+        if oblika_plosce == "Stopniščna (pod kotom)":
+            dx_max = params['h'] * math.tan(math.radians(params['kot']))
+            st.caption(f"💡 *Nasvet:* Zaradi naklona {params['kot']}° se zunanji rob pri viši Y spreminja za do {dx_max:.1f} mm.")
+
         c_l1, c_l2, c_l3 = st.columns([2, 2, 1])
         with c_l1:
             tip_l = st.selectbox("Tip izreza:", [
                 "Okrogla", "Štirikotna", "Ovalna (utor)", 
                 "Trikotna", "Šestkotna", "Osemkotna", "Poljuben N-kotnik"
             ])
-            pos_x_l = st.number_input("X pozicija (mm)", value=float(mejna_sirina/2), step=10.0)
-            pos_y_l = st.number_input("Y pozicija (mm)", value=float(mejna_visina/2), step=10.0)
-            kot_rotacije = st.number_input("Kot rotacije (°)", value=0.0, step=5.0)
+            pos_x_l = st.number_input("X pozicija (mm)", value=float(mejna_sirina/2), step=1.0)
+            pos_y_l = st.number_input("Y pozicija (mm)", value=float(mejna_visina/2), step=1.0)
+            kot_rotacije = st.number_input("Kot rotacije (°)", value=0.0, step=1.0)
         
         with c_l2:
             n_stranic = 6
             if tip_l == "Okrogla":
-                premer_l = st.number_input("Premer ø (mm)", value=20.0, step=2.0)
+                premer_l = st.number_input("Premer ø (mm)", value=20.0, step=1.0)
                 r_l = premer_l / 2.0
                 w_l, h_l = premer_l, premer_l
             elif tip_l in ["Štirikotna", "Ovalna (utor)"]:
-                w_l = st.number_input("Širina izreza (mm)", value=50.0, step=5.0)
-                h_l = st.number_input("Višina izreza (mm)", value=30.0, step=5.0)
+                w_l = st.number_input("Širina izreza (mm)", value=50.0, step=1.0)
+                h_l = st.number_input("Višina izreza (mm)", value=30.0, step=1.0)
                 r_l = min(w_l, h_l) / 2.0
             else:
                 if tip_l == "Trikotna": n_stranic = 3
                 elif tip_l == "Šestkotna": n_stranic = 6
                 elif tip_l == "Osemkotna": n_stranic = 8
                 elif tip_l == "Poljuben N-kotnik":
-                    n_stranic = st.number_input("Število oglišč N", min_value=3, max_value=20, value=5)
+                    n_stranic = st.number_input("Število oglišč N", min_value=3, max_value=20, value=5, step=1)
                 
-                r_l = st.number_input("Polmer R (mm)", value=25.0, step=2.5)
+                r_l = st.number_input("Polmer R (mm)", value=25.0, step=1.0)
                 w_l, h_l = r_l * 2, r_l * 2
 
         with c_l3:
@@ -270,10 +294,10 @@ elif modul == "CAD / DXF Generator":
         if slika_objekt is not None:
             c_v1, c_v2 = st.columns(2)
             with c_v1:
-                v_sirina = st.number_input("Širina vzorca (mm)", value=float(mejna_sirina * 0.8), step=10.0)
-                v_visina = st.number_input("Višina vzorca (mm)", value=float(mejna_visina * 0.8), step=10.0)
-                pos_x = st.number_input("Odmik X (mm)", value=float((mejna_sirina - v_sirina)/2), step=5.0)
-                pos_y = st.number_input("Odmik Y (mm)", value=float((mejna_visina - v_visina)/2), step=5.0)
+                v_sirina = st.number_input("Širina vzorca (mm)", value=float(mejna_sirina * 0.8), step=1.0)
+                v_visina = st.number_input("Višina vzorca (mm)", value=float(mejna_visina * 0.8), step=1.0)
+                pos_x = st.number_input("Odmik X (mm)", value=float((mejna_sirina - v_sirina)/2), step=1.0)
+                pos_y = st.number_input("Odmik Y (mm)", value=float((mejna_visina - v_visina)/2), step=1.0)
             with c_v2:
                 thresh_val = st.slider("Občutljivost vzorca", 0, 255, 127)
                 min_area = st.slider("Min. površina", 10, 5000, 200)
