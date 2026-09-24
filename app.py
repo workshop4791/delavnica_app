@@ -1,4 +1,3 @@
-
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -12,12 +11,12 @@ import os
 
 st.set_page_config(page_title="Moja Delavnica", page_icon="🛠️", layout="wide")
 
-# Map za trajno shranjevanje vzorcev
+# Mapa za trajno shranjevanje vzorcev
 MAPA_VZORCEV = "shranjeni_vzorci"
 if not os.path.exists(MAPA_VZORCEV):
     os.makedirs(MAPA_VZORCEV)
 
-# --- Funkcija za generiranje DXF z vzorcem ---
+# --- Funkcija za generiranje DXF z vzorcem ali brez ---
 def ustvari_dxf_z_vzorcem(sirina, visina, konture_vzorca=None):
     doc = ezdxf.new('R2010')
     msp = doc.modelspace()
@@ -63,7 +62,7 @@ TEXTS = {
         "width": "Širina plošče L1 (mm):",
         "height": "Višina / Krak L2 (mm):",
         "download_dxf": "💾 Prenesi pravi DXF za razrez",
-        "sketch_title": "Fotografiraj ročno skico",
+        "sketch_title": "Fotografiraj ali naloži ročno skico",
         "upload_sketch": "Naloži skico...",
         "pattern_title": "Vzorci in ograjni paneli",
         "pattern_info": "Naloži ali izberi vzorec za izrez na ploščo.",
@@ -103,8 +102,106 @@ elif modul == t["modules"][1]:
     with zavihek2:
         st.subheader(t["sketch_title"])
         slika_skice = st.file_uploader(t["upload_sketch"], type=["jpg", "jpeg", "png"], key="skica")
+        
         if slika_skice:
-            st.image(slika_skice, caption="Naložena skica", use_container_width=True)
+            col_s1, col_s2 = st.columns([1, 1])
+            with col_s1:
+                st.image(slika_skice, caption="Naložena ročna skica", use_container_width=True)
+            
+            with col_s2:
+                st.markdown("### ⚙️ Dimenzije iz skice za razrez")
+                skica_sirina = st.number_input("Širina plošče L1 (mm)", value=1000, step=50, key="skica_w")
+                skica_visina = st.number_input("Višina plošče L2 (mm)", value=1500, step=50, key="skica_h")
+                
+                # MOŽNOST DODAJANJA VZORCA
+                dodaj_vzorec = st.checkbox("✨ Želim na to ploščo dodati vzorec / izrez", value=False)
+            
+            skalirane_konture_skica = None
+            
+            if dodaj_vzorec:
+                st.markdown("---")
+                st.markdown("### 🎨 Izbiranje in prilagoditev vzorca na skici")
+                
+                shranjene_datoteke = [f for f in os.listdir(MAPA_VZORCEV) if f.endswith(('.png', '.jpg', '.jpeg'))]
+                izbira_vzorca = st.radio("Vir vzorca:", ["Izberi shranjen vzorec iz zbirke", "Naloži novo sliko"], key="radio_skica")
+                
+                slika_objekt_skica = None
+                if izbira_vzorca == "Izberi shranjen vzorec iz zbirke":
+                    if shranjene_datoteke:
+                        izbran_fajl = st.selectbox("Izberi vzorec:", shranjene_datoteke, key="sel_skica")
+                        slika_objekt_skica = Image.open(os.path.join(MAPA_VZORCEV, izbran_fajl)).convert('RGB')
+                    else:
+                        st.info("Nimaš shranjenih vzorcev. Naloži novega.")
+                else:
+                    slika_v = st.file_uploader("Naloži sliko vzorca...", type=["jpg", "jpeg", "png"], key="up_skica")
+                    if slika_v:
+                        slika_objekt_skica = Image.open(slika_v).convert('RGB')
+
+                if slika_objekt_skica is not None:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        v_sirina = st.number_input("Širina vzorca (mm)", value=float(skica_sirina - 200), min_value=1.0, max_value=float(skica_sirina), step=10.0, key="sw")
+                        v_visina = st.number_input("Višina vzorca (mm)", value=float(skica_visina - 200), min_value=1.0, max_value=float(skica_visina), step=10.0, key="sh")
+                        pos_x = st.number_input("Odmik od levega roba X (mm)", value=float((skica_sirina - v_sirina)/2), min_value=0.0, max_value=float(skica_sirina - v_sirina), step=5.0, key="sx")
+                        pos_y = st.number_input("Odmik od spodnjega roba Y (mm)", value=float((skica_visina - v_visina)/2), min_value=0.0, max_value=float(skica_visina - v_visina), step=5.0, key="sy")
+                    with c2:
+                        thresh_val = st.slider("Threshold (Občutljivost)", 0, 255, 127, key="sthr")
+                        min_area = st.slider("Minimalna površina smeti", 10, 5000, 200, key="smin")
+                        obrni_barve = st.checkbox("Invertiraj barve vzorca", key="sinv")
+
+                    # Procesiranje slike
+                    img_np = np.array(slika_objekt_skica)
+                    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                    mode = cv2.THRESH_BINARY_INV if not obrni_barve else cv2.THRESH_BINARY
+                    _, thresh = cv2.threshold(gray, thresh_val, 255, mode)
+                    konture, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                    
+                    h_img, w_img = gray.shape
+                    skalirane_konture_skica = []
+                    for k in konture:
+                        if cv2.contourArea(k) >= min_area:
+                            k_scaled = k.astype(np.float32)
+                            k_scaled[:, 0, 0] = pos_x + (k_scaled[:, 0, 0] / w_img) * v_sirina
+                            k_scaled[:, 0, 1] = pos_y + ((h_img - k_scaled[:, 0, 1]) / h_img) * v_visina
+                            skalirane_konture_skica.append(k_scaled)
+
+            st.markdown("---")
+            st.markdown("### 📐 CAD predogled pred rezanjem")
+            
+            fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
+            rect = patches.Rectangle((0, 0), skica_sirina, skica_visina, linewidth=2, edgecolor='black', facecolor='#e6f2ff')
+            ax.add_patch(rect)
+            
+            # Risanje vzorca, če obstaja
+            if skalirane_konture_skica is not None:
+                for kontura in skalirane_konture_skica:
+                    pts = kontura.reshape(-1, 2)
+                    ax.plot(pts[:, 0], pts[:, 1], color='red', linewidth=1.2)
+            
+            # Kotirni puščici
+            ax.annotate('', xy=(0, -30), xytext=(skica_sirina, -30), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
+            ax.text(skica_sirina / 2, -70, f"{int(skica_sirina)} mm", ha='center', color='blue', fontsize=12, fontweight='bold')
+            
+            ax.annotate('', xy=(-30, 0), xytext=(-30, skica_visina), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
+            ax.text(-70, skica_visina / 2, f"{int(skica_visina)} mm", va='center', rotation='vertical', color='blue', fontsize=12, fontweight='bold')
+            
+            ax.set_xlim(-150, skica_sirina + 100)
+            ax.set_ylim(-150, skica_visina + 100)
+            ax.set_xlabel("X (mm)")
+            ax.set_ylabel("Y (mm)")
+            ax.grid(True, linestyle=':', alpha=0.6)
+            ax.set_aspect('equal')
+            
+            st.pyplot(fig, use_container_width=True)
+            
+            # DXF Izvoz
+            dxf_skica = ustvari_dxf_z_vzorcem(skica_sirina, skica_visina, skalirane_konture_skica)
+            st.download_button(
+                label=f"💾 Prenesi DXF za razrez ({int(skica_sirina)}x{int(skica_visina)} mm)",
+                data=dxf_skica,
+                file_name=f"razrez_{int(skica_sirina)}x{int(skica_visina)}mm.dxf",
+                mime="application/dxf"
+            )
 
     with zavihek3:
         st.subheader(t["pattern_title"])
@@ -120,9 +217,7 @@ elif modul == t["modules"][1]:
         st.markdown("---")
         st.markdown("### 2. Izbor ali nalaganje vzorca")
         
-        # Pridobivanje shranjenih vzorcev
         shranjene_datoteke = [f for f in os.listdir(MAPA_VZORCEV) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        
         izbira_vzorca = st.radio("Kako želiš izbrati vzorec?", ["Naloži novo sliko", "Izberi shranjen vzorec iz zbirke"])
         
         slika_objekt = None
@@ -131,8 +226,6 @@ elif modul == t["modules"][1]:
             slika_vzorca = st.file_uploader("Naloži sliko vzorca...", type=["jpg", "jpeg", "png"], key="vzorec_upload")
             if slika_vzorca:
                 slika_objekt = Image.open(slika_vzorca).convert('RGB')
-                
-                # Možnost za shranjevanje v zbirko
                 col_s1, col_s2 = st.columns([2, 1])
                 with col_s1:
                     novo_ime = st.text_input("Ime vzorca za shranjevanje (npr. 'roža_v1'):", "")
@@ -180,7 +273,7 @@ elif modul == t["modules"][1]:
                 sredina_y = (p_visina - v_visina) / 2.0
                 
                 pos_x = st.number_input("Odmik vzorca od levega roba X (mm)", value=float(sredina_x), min_value=0.0, max_value=float(p_sirina - v_sirina), step=5.0)
-                pos_y = st.number_input("Odmik vzorca od spodnjega roba Y (mm)", value=float(sredina_y), min_value=0.0, max_value=float(p_visina - v_visina), step=5.0)
+                pos_y = st.number_input("Odmik vzorca od spodnjega roba Y (mm)", value=float(sredina_y), min_value=0.0, max_value=float(p_sirina - v_sirina), step=5.0)
 
             with c2:
                 st.write("**Čiščenje nečistoč na sliki:**")
@@ -212,14 +305,10 @@ elif modul == t["modules"][1]:
             st.markdown("---")
             st.markdown("### 4. Povečan predogled izreza")
             
-            # Povečan predogled
             fig, ax = plt.subplots(figsize=(12, 6), dpi=150)
-            
-            # Zunanja plošča
             rect = patches.Rectangle((0, 0), p_sirina, p_visina, linewidth=2, edgecolor='black', facecolor='#f0f0f0')
             ax.add_patch(rect)
             
-            # Risanje vzorca
             for kontura in skalirane_konture:
                 pts = kontura.reshape(-1, 2)
                 ax.plot(pts[:, 0], pts[:, 1], color='red', linewidth=1.2)
@@ -233,7 +322,6 @@ elif modul == t["modules"][1]:
             
             st.pyplot(fig, use_container_width=True)
             
-            # Prenos DXF
             dxf_vzorec = ustvari_dxf_z_vzorcem(p_sirina, p_visina, skalirane_konture)
             st.download_button(
                 label="💾 Prenesi očiščen DXF z merami",
