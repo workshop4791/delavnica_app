@@ -45,10 +45,18 @@ def ai_analiza_skice_z_gemini(slika_pil, api_key):
         }
         Vse dimenzije pretvori v milimetre (mm). Če so v metrih (m), pomnoži s 1000.
         """
-        response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=[slika_pil, prompt]
-        )
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[slika_pil, prompt]
+            )
+        except Exception:
+            # Rezervni model, če primarni ni na voljo
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=[slika_pil, prompt]
+            )
+
         clean_json = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_json)
     except Exception as e:
@@ -58,7 +66,6 @@ def ai_analiza_skice_z_gemini(slika_pil, api_key):
 # --- AI Funkcija za segmentacijo vzorca ograje s terena ---
 def ai_obdelava_vzorca_ograje(slika_pil, api_key):
     try:
-        client = genai.Client(api_key=api_key)
         img_np = np.array(slika_pil.convert('L'))
         blurred = cv2.GaussianBlur(img_np, (5, 5), 0)
         thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
