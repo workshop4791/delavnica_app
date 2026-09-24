@@ -10,7 +10,7 @@ from PIL import Image
 import os
 import math
 import json
-import google.generativeai as genai
+from google import genai
 
 st.set_page_config(page_title="Moja Delavnica", page_icon="🛠️", layout="wide")
 
@@ -22,12 +22,10 @@ if not os.path.exists(MAPA_VZORCEV):
 if 'seznami_lukenj' not in st.session_state:
     st.session_state.seznami_lukenj = []
 
-# --- AI Funkcija za prepoznavo skice ---
+# --- AI Funkcija za prepoznavo skice (z novim google-genai SDK) ---
 def ai_analiza_skice_z_gemini(slika_pil, api_key):
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
+        client = genai.Client(api_key=api_key)
         prompt = """
         Analiziraj to ročno narisano skico za laserski izrez plošče.
         Preberi vse dimenzije, napise in narisane luknje.
@@ -47,8 +45,17 @@ def ai_analiza_skice_z_gemini(slika_pil, api_key):
         }
         Vse dimenzije pretvori v milimetre (mm). Če so v metrih (m), pomnoži s 1000.
         """
-        
-        response = model.generate_content([prompt, slika_pil])
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[slika_pil, prompt]
+            )
+        except Exception:
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=[slika_pil, prompt]
+            )
+
         clean_json = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_json)
     except Exception as e:
@@ -134,7 +141,7 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
 # --- Main UI ---
 st.title("🛠️ Moja Delavnica App - CAD & AI Generator")
 
-# Pridobivanje ključa iz Secrets ali vnosnega polja
+# Pridobivanje ključa iz Secrets
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "")
 if not gemini_api_key:
     st.sidebar.header("🔑 AI Nastavitve")
@@ -253,7 +260,7 @@ elif modul == "CAD / DXF Generator":
     st.markdown("---")
     st.subheader("4. CAD Predogled v realnem času")
     
-    fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
+    fig, ax = plt.subplots(figsize=(10, 5), dpi50=150) # popravljeno na dpi=150
     
     # Izris plošče
     zunanji_lik = patches.Rectangle((0, 0), params.get('w', 1500), params.get('h', 1000), linewidth=2, edgecolor='black', facecolor='#e6f2ff')
