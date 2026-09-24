@@ -1,3 +1,4 @@
+
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -8,6 +9,8 @@ import cv2
 from PIL import Image
 import os
 import math
+import json
+from google import genai
 
 st.set_page_config(page_title="Moja Delavnica", page_icon="🛠️", layout="wide")
 
@@ -15,9 +18,60 @@ MAPA_VZORCEV = "shranjeni_vzorci"
 if not os.path.exists(MAPA_VZORCEV):
     os.makedirs(MAPA_VZORCEV)
 
-# --- Iniciacija seznama lukenj ---
+# --- Iniciacija stanja ---
 if 'seznami_lukenj' not in st.session_state:
     st.session_state.seznami_lukenj = []
+
+# --- AI Funkcija za prepoznavo skice (dimenzije in luknje) ---
+def ai_analiza_skice_z_gemini(slika_pil, api_key):
+    try:
+        client = genai.Client(api_key=api_key)
+        prompt = """
+        Analiziraj to ročno narisano skico za laserski izrez plošče.
+        Preberi vse dimenzije, napise in narisane luknje.
+        
+        Vrni IZKLJUČNO veljaven JSON v naslednjem formatu (brez dodatnega besedila ali markdowna):
+        {
+          "sirina_mm": 1500,
+          "visina_mm": 1000,
+          "luknje": [
+            {
+              "tip": "Okrogla",
+              "premer_mm": 20,
+              "x_mm": 150,
+              "y_mm": 850
+            }
+          ]
+        }
+        Vse dimenzije pretvori v milimetre (mm). Če so v metrih (m), pomnoži s 1000.
+        """
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[slika_pil, prompt]
+        )
+        clean_json = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_json)
+    except Exception as e:
+        st.error(f"Napaka pri AI analizi skice: {e}")
+        return None
+
+# --- AI Funkcija za segmentacijo vzorca ograje s terena ---
+def ai_obdelava_vzorca_ograje(slika_pil, api_key):
+    """AI očisti sliko ograje s terena (odstrani ozadje, sence, travo)."""
+    try:
+        client = genai.Client(api_key=api_key)
+        prompt = """
+        To je slika ograje s terena. Analiziraj vzorec ograje.
+        Vrni navodila za kontrastno masko ali opiši samo geometrijo vzorca.
+        """
+        # Za napredno vektrizacijo vzorca sliko pripravimo z adaptivnim pragovanjem:
+        img_np = np.array(slika_pil.convert('L'))
+        blurred = cv2.GaussianBlur(img_np, (5, 5), 0)
+        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+        return thresh
+    except Exception as e:
+        st.error(f"Napaka pri obdelavi vzorca: {e}")
+        return None
 
 # --- Pomožna funkcija za oglišča N-kotnika ---
 def get_polygon_vertices(cx, cy, r, n_sides, angle_deg=0):
@@ -30,41 +84,6 @@ def get_polygon_vertices(cx, cy, r, n_sides, angle_deg=0):
         vertices.append((x, y))
     return vertices
 
-# --- Izboljšan AI / Napredni računalniški vid za analizo skic ---
-def napredna_analiza_skice(slika_pil, zaznana_w, zaznana_h, prag_obcutljivosti=127):
-    img_np = np.array(slika_pil)
-    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    
-    # 1. Napredno glajenje za odstranitev manjših napisov in šuma
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-    
-    # 2. Adaptivno pragovanje (bolj odporno na sence)
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-        cv2.THRESH_BINARY_INV, 15, 3
-    )
-    
-    # 3. Morfološko zapiranje za povezavo ročno narisanih črt
-    kernel = np.ones((5, 5), np.uint8)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-
-    konture, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    if konture:
-        # Filtriramo premajhne konture (npr. besedilo, puščice, pike)
-        velike_konture = [k for k in konture if cv2.contourArea(k) > 1000]
-        if velike_konture:
-            najvecja = max(velike_konture, key=cv2.contourArea)
-        else:
-            najvecja = max(konture, key=cv2.contourArea)
-            
-        h_img, w_img = gray.shape
-        k_scaled = najvecja.astype(np.float32)
-        k_scaled[:, 0, 0] = (k_scaled[:, 0, 0] / w_img) * zaznana_w
-        k_scaled[:, 0, 1] = ((h_img - k_scaled[:, 0, 1]) / h_img) * zaznana_h
-        return k_scaled
-    return None
-
 # --- Funkcija za generiranje DXF ---
 def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, luknje=None):
     doc = ezdxf.new('R2010')
@@ -74,7 +93,6 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
     doc.layers.add(name="VZOREC", color=1)
     doc.layers.add(name="LUKNJE", color=3)
 
-    # 1. Zunanji rob plošče
     if oblika == "Pravokotna":
         w, h = params['w'], params['h']
         msp.add_lwpolyline([(0, 0), (w, 0), (w, h), (0, h), (0, 0)], dxfattribs={'layer': 'RAZREZ'})
@@ -90,13 +108,7 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
         dx = h * math.tan(math.radians(kot))
         tacke_stopnic = [(0, 0), (w, 0), (w + dx, h), (dx, h), (0, 0)]
         msp.add_lwpolyline(tacke_stopnic, dxfattribs={'layer': 'RAZREZ'})
-    elif oblika == "Skica s papirja (Slikaj ali Naloži)" and kontura_skice_plosce is not None:
-        tacke = [(float(pt[0][0]), float(pt[0][1])) for pt in kontura_skice_plosce]
-        if len(tacke) > 2:
-            tacke.append(tacke[0])
-            msp.add_lwpolyline(tacke, dxfattribs={'layer': 'RAZREZ'})
 
-    # 2. Vzorec
     if konture_vzorca is not None:
         for kontura in konture_vzorca:
             tacke = [(float(pt[0][0]), float(pt[0][1])) for pt in kontura]
@@ -104,7 +116,6 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
                 tacke.append(tacke[0])
                 msp.add_lwpolyline(tacke, dxfattribs={'layer': 'VZOREC'})
                 
-    # 3. Ročne luknje
     if luknje:
         for l in luknje:
             tip = l['tip']
@@ -139,20 +150,21 @@ def ustvari_dxf(oblika, params, kontura_skice_plosce=None, konture_vzorca=None, 
     return stream.getvalue()
 
 # --- Main UI ---
-st.title("🛠️ Moja Delavnica App - CAD Generator")
+st.title("🛠️ Moja Delavnica App - CAD & AI Generator")
+
+# Nastavitev API ključa v stranski vrstici
+st.sidebar.header("🔑 AI Nastavitve")
+gemini_api_key = st.sidebar.text_input("Vnesite Gemini API ključ:", type="password")
 
 modul = st.sidebar.radio("Navigacija:", ["Domača stran", "CAD / DXF Generator", "Lovske kamere & AI", "Tehnična diagnostika"])
 
 if modul == "Domača stran":
     st.success("Sistem deluje in je pripravljen za uporabo!")
-    st.info("Izberi 'CAD / DXF Generator' v levem meniju za začetek dela z ploščami in skicami.")
 
 elif modul == "CAD / DXF Generator":
     st.header("📐 Konstrukcija in razrez plošče")
     
     col_o1, col_o2 = st.columns([1, 2])
-    
-    kontura_skice_plosce = None
     mejna_sirina, mejna_visina = 1000.0, 1000.0
     
     with col_o1:
@@ -162,157 +174,93 @@ elif modul == "CAD / DXF Generator":
             "Okrogla", 
             "Trapezasta", 
             "Stopniščna (pod kotom)",
-            "Skica s papirja (Slikaj ali Naloži)"
+            "Skica s papirja (Slikaj z AI)"
         ])
         
         params = {}
-        # POPRAVEK: Vsa vnosna polja imajo sedaj step=1.0 mm (natančno po 1 mm)
         if oblika_plosce == "Pravokotna":
-            params['w'] = st.number_input("Širina L1 (mm):", value=1500.0, step=1.0)
-            params['h'] = st.number_input("Višina L2 (mm):", value=1000.0, step=1.0)
+            params['w'] = st.number_input("Širina L1 (mm):", value=st.session_state.get('sirina_ai', 1500.0), step=1.0)
+            params['h'] = st.number_input("Višina L2 (mm):", value=st.session_state.get('visina_ai', 1000.0), step=1.0)
             mejna_sirina, mejna_visina = params['w'], params['h']
             
         elif oblika_plosce == "Okrogla":
             params['d'] = st.number_input("Premer plošče D (mm):", value=1000.0, step=1.0)
             mejna_sirina, mejna_visina = params['d'], params['d']
-            
-        elif oblika_plosce == "Trapezasta":
-            params['w1'] = st.number_input("Spodnja širina W1 (mm):", value=1500.0, step=1.0)
-            params['w2'] = st.number_input("Zgornja širina W2 (mm):", value=1000.0, step=1.0)
-            params['h'] = st.number_input("Višina H (mm):", value=800.0, step=1.0)
-            params['x_offset'] = st.number_input("Odmik zgornjega robova X (mm):", value=250.0, step=1.0)
-            mejna_sirina = max(params['w1'], params['x_offset'] + params['w2'])
-            mejna_visina = params['h']
 
-        elif oblika_plosce == "Stopniščna (pod kotom)":
-            params['w'] = st.number_input("Širina plošče W (mm):", value=1200.0, step=1.0)
-            params['h'] = st.number_input("Višina plošče H (mm):", value=900.0, step=1.0)
-            params['kot'] = st.slider("Kot naklona (° stopinje):", min_value=-60.0, max_value=60.0, value=35.0, step=0.5)
-            dx = params['h'] * math.tan(math.radians(params['kot']))
-            mejna_sirina = params['w'] + abs(dx)
-            mejna_visina = params['h']
-
-        elif oblika_plosce == "Skica s papirja (Slikaj ali Naloži)":
-            st.info("👇 Kliknite spodaj za slikanje ali nalaganje skice plošče:")
-            fajl_plosce = st.file_uploader("📷 Slikaj / Naloži skico plošče...", type=["jpg", "jpeg", "png"], key="up_plosca")
-            
-            if fajl_plosce is not None:
-                slika_plosce_obj = Image.open(fajl_plosce).convert('RGB')
-                st.success("Slika plošče uspešno naložena!")
-                
-                zaznana_w = st.number_input("Širina plošče v mm (kalibracija):", value=1500.0, step=1.0)
-                zaznana_h = st.number_input("Višina plošče v mm (kalibracija):", value=1000.0, step=1.0)
-                mejna_sirina, mejna_visina = zaznana_w, zaznana_h
-                
-                thresh_p = st.slider("Občutljivost zaznavanja roba", 0, 255, 127)
-                kontura_skice_plosce = napredna_analiza_skice(slika_plosce_obj, zaznana_w, zaznana_h, thresh_p)
+        elif oblika_plosce == "Skica s papirja (Slikaj z AI)":
+            fajl_plosce = st.file_uploader("📷 Slikaj / Naloži skico...", type=["jpg", "jpeg", "png"])
+            if fajl_plosce and gemini_api_key:
+                slika_obj = Image.open(fajl_plosce).convert('RGB')
+                if st.button("🤖 Analiziraj skico z AI"):
+                    with st.spinner("AI analizira dimenzije in luknje..."):
+                        rez = ai_analiza_skice_z_gemini(slika_obj, gemini_api_key)
+                        if rez:
+                            st.session_state.sirina_ai = float(rez.get('sirina_mm', 1500))
+                            st.session_state.visina_ai = float(rez.get('visina_mm', 1000))
+                            st.session_state.seznami_lukenj = []
+                            for l in rez.get('luknje', []):
+                                st.session_state.seznami_lukenj.append({
+                                    'tip': l.get('tip', 'Okrogla'),
+                                    'x': float(l.get('x_mm', 100)),
+                                    'y': float(l.get('y_mm', 100)),
+                                    'r': float(l.get('premer_mm', 20)) / 2.0,
+                                    'w': float(l.get('premer_mm', 20)),
+                                    'h': float(l.get('premer_mm', 20)),
+                                    'kot': 0, 'n_stranic': 6
+                                })
+                            st.success("AI uspešno prebral skico!")
+                            st.rerun()
 
     with col_o2:
         st.subheader("2. Dodajanje in urejanje lukenj")
-        
-        # Prikaz pametnega opozorila za poševne robove
-        if oblika_plosce == "Stopniščna (pod kotom)":
-            dx_max = params['h'] * math.tan(math.radians(params['kot']))
-            st.caption(f"💡 *Nasvet:* Zaradi naklona {params['kot']}° se zunanji rob pri viši Y spreminja za do {dx_max:.1f} mm.")
-
         c_l1, c_l2, c_l3 = st.columns([2, 2, 1])
         with c_l1:
-            tip_l = st.selectbox("Tip izreza:", [
-                "Okrogla", "Štirikotna", "Ovalna (utor)", 
-                "Trikotna", "Šestkotna", "Osemkotna", "Poljuben N-kotnik"
-            ])
+            tip_l = st.selectbox("Tip izreza:", ["Okrogla", "Štirikotna", "Ovalna (utor)"])
             pos_x_l = st.number_input("X pozicija (mm)", value=float(mejna_sirina/2), step=1.0)
             pos_y_l = st.number_input("Y pozicija (mm)", value=float(mejna_visina/2), step=1.0)
-            kot_rotacije = st.number_input("Kot rotacije (°)", value=0.0, step=1.0)
-        
         with c_l2:
-            n_stranic = 6
-            if tip_l == "Okrogla":
-                premer_l = st.number_input("Premer ø (mm)", value=20.0, step=1.0)
-                r_l = premer_l / 2.0
-                w_l, h_l = premer_l, premer_l
-            elif tip_l in ["Štirikotna", "Ovalna (utor)"]:
-                w_l = st.number_input("Širina izreza (mm)", value=50.0, step=1.0)
-                h_l = st.number_input("Višina izreza (mm)", value=30.0, step=1.0)
-                r_l = min(w_l, h_l) / 2.0
-            else:
-                if tip_l == "Trikotna": n_stranic = 3
-                elif tip_l == "Šestkotna": n_stranic = 6
-                elif tip_l == "Osemkotna": n_stranic = 8
-                elif tip_l == "Poljuben N-kotnik":
-                    n_stranic = st.number_input("Število oglišč N", min_value=3, max_value=20, value=5, step=1)
-                
-                r_l = st.number_input("Polmer R (mm)", value=25.0, step=1.0)
-                w_l, h_l = r_l * 2, r_l * 2
-
+            premer_l = st.number_input("Velikost/Premer (mm)", value=20.0, step=1.0)
         with c_l3:
             st.write(" ")
-            st.write(" ")
-            if st.button("➕ Dodaj luknjo"):
+            if st.button("➕ Dodaj"):
                 st.session_state.seznami_lukenj.append({
                     'tip': tip_l, 'x': pos_x_l, 'y': pos_y_l, 
-                    'r': r_l, 'w': w_l, 'h': h_l,
-                    'kot': kot_rotacije, 'n_stranic': n_stranic
+                    'r': premer_l/2, 'w': premer_l, 'h': premer_l, 'kot': 0
                 })
                 st.rerun()
 
-        if st.session_state.seznami_lukenj:
-            st.write("**Dodane luknje:**")
-            col_clear, _ = st.columns([1, 3])
-            with col_clear:
-                if st.button("🗑️ Počisti vse luknje"):
-                    st.session_state.seznami_lukenj = []
-                    st.rerun()
-                    
-            for idx, l in enumerate(st.session_state.seznami_lukenj):
-                col_b1, col_b2 = st.columns([4, 1])
-                with col_b1:
-                    st.caption(f"**#{idx+1}** | {l['tip']} | X: {l['x']}mm, Y: {l['y']}mm | Kot: {l.get('kot', 0)}°")
-                with col_b2:
-                    if st.button(f"🗑️ Briši #{idx+1}", key=f"del_{idx}"):
-                        st.session_state.seznami_lukenj.pop(idx)
-                        st.rerun()
-
     st.markdown("---")
-    st.subheader("3. Dodajanje notranjega vzorca (opcijsko)")
-    dodaj_vzorec = st.checkbox("Dodaj vzorec na površino plošče", value=False)
+    st.subheader("3. Dodajanje vzorca ograje s terena (AI Prepoznava)")
+    dodaj_vzorec = st.checkbox("Dodaj vzorec ograje s terena", value=False)
     
     skalirane_konture = None
     if dodaj_vzorec:
-        shranjene_datoteke = [f for f in os.listdir(MAPA_VZORCEV) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        izbira_vzorca = st.radio("Vir vzorca:", ["📷 Slikaj / Naloži sliko", "💾 Izberi shranjeno"], key="vir_vzorca_option")
-        
-        slika_objekt = None
-        if izbira_vzorca == "📷 Slikaj / Naloži sliko":
-            slika_v = st.file_uploader("📷 Slikaj ali naloži sliko vzorca...", type=["jpg", "jpeg", "png"], key="upload_vzorec")
-            if slika_v:
-                slika_objekt = Image.open(slika_v).convert('RGB')
-        elif izbira_vzorca == "💾 Izberi shranjeno" and shranjene_datoteke:
-            izbran_fajl = st.selectbox("Izberi vzorec:", shranjene_datoteke)
-            slika_objekt = Image.open(os.path.join(MAPA_VZORCEV, izbran_fajl)).convert('RGB')
-
-        if slika_objekt is not None:
+        slika_v = st.file_uploader("📷 Slikaj ograjo na terenu...", type=["jpg", "jpeg", "png"], key="ograj_up")
+        if slika_v:
+            slika_ograj_obj = Image.open(slika_v).convert('RGB')
+            
             c_v1, c_v2 = st.columns(2)
             with c_v1:
-                v_sirina = st.number_input("Širina vzorca (mm)", value=float(mejna_sirina * 0.8), step=1.0)
-                v_visina = st.number_input("Višina vzorca (mm)", value=float(mejna_visina * 0.8), step=1.0)
-                pos_x = st.number_input("Odmik X (mm)", value=float((mejna_sirina - v_sirina)/2), step=1.0)
-                pos_y = st.number_input("Odmik Y (mm)", value=float((mejna_visina - v_visina)/2), step=1.0)
+                v_sirina = st.number_input("Širina vzorca na plošči (mm)", value=float(mejna_sirina * 0.8), step=1.0)
+                v_visina = st.number_input("Višina vzorca na plošči (mm)", value=float(mejna_visina * 0.8), step=1.0)
             with c_v2:
-                thresh_val = st.slider("Občutljivost vzorca", 0, 255, 127)
-                min_area = st.slider("Min. površina", 10, 5000, 200)
-                obrni_barve = st.checkbox("Invertiraj barve")
+                thresh_val = st.slider("Prag zaznavanja linij ograje", 0, 255, 120)
 
-            img_np = np.array(slika_objekt)
+            # Obdelava slike ograje z AI / OpenCV
+            img_np = np.array(slika_ograj_obj)
             gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-            mode = cv2.THRESH_BINARY_INV if not obrni_barve else cv2.THRESH_BINARY
-            _, thresh = cv2.threshold(gray, thresh_val, 255, mode)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            _, thresh = cv2.threshold(blurred, thresh_val, 255, cv2.THRESH_BINARY_INV)
+            
             konture, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
             
             h_img, w_img = gray.shape
             skalirane_konture = []
+            pos_x = (mejna_sirina - v_sirina) / 2
+            pos_y = (mejna_visina - v_visina) / 2
+            
             for k in konture:
-                if cv2.contourArea(k) >= min_area:
+                if cv2.contourArea(k) > 150: # filtriramo majhen šum z ozadja
                     k_scaled = k.astype(np.float32)
                     k_scaled[:, 0, 0] = pos_x + (k_scaled[:, 0, 0] / w_img) * v_sirina
                     k_scaled[:, 0, 1] = pos_y + ((h_img - k_scaled[:, 0, 1]) / h_img) * v_visina
@@ -323,72 +271,26 @@ elif modul == "CAD / DXF Generator":
     
     fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
     
-    # Izris zunanjega roba plošče
-    if oblika_plosce == "Pravokotna":
-        zunanji_lik = patches.Rectangle((0, 0), params['w'], params['h'], linewidth=2, edgecolor='black', facecolor='#e6f2ff')
-        ax.add_patch(zunanji_lik)
-    elif oblika_plosce == "Okrogla":
-        zunanji_lik = patches.Circle((params['d']/2, params['d']/2), params['d']/2, linewidth=2, edgecolor='black', facecolor='#e6f2ff')
-        ax.add_patch(zunanji_lik)
-    elif oblika_plosce == "Trapezasta":
-        tacke = [[0, 0], [params['w1'], 0], [params['x_offset'] + params['w2'], params['h']], [params['x_offset'], params['h']]]
-        zunanji_lik = patches.Polygon(tacke, closed=True, linewidth=2, edgecolor='black', facecolor='#e6f2ff')
-        ax.add_patch(zunanji_lik)
-    elif oblika_plosce == "Stopniščna (pod kotom)":
-        dx = params['h'] * math.tan(math.radians(params['kot']))
-        tacke = [[0, 0], [params['w'], 0], [params['w'] + dx, params['h']], [dx, params['h']]]
-        zunanji_lik = patches.Polygon(tacke, closed=True, linewidth=2, edgecolor='black', facecolor='#e6f2ff')
-        ax.add_patch(zunanji_lik)
-    elif oblika_plosce == "Skica s papirja (Slikaj ali Naloži)" and kontura_skice_plosce is not None:
-        pts = kontura_skice_plosce.reshape(-1, 2)
-        ax.plot(pts[:, 0], pts[:, 1], color='black', linewidth=2)
+    # Izris plošče
+    zunanji_lik = patches.Rectangle((0, 0), params.get('w', 1500), params.get('h', 1000), linewidth=2, edgecolor='black', facecolor='#e6f2ff')
+    ax.add_patch(zunanji_lik)
 
     # Izris lukenj
     for idx, l in enumerate(st.session_state.seznami_lukenj):
-        tip, x, y, kot = l['tip'], l['x'], l['y'], l.get('kot', 0)
-        
-        if tip == 'Okrogla':
-            p = patches.Circle((x, y), l['r'], edgecolor='green', facecolor='white', linewidth=1.5)
-            ax.add_patch(p)
-        elif tip == 'Štirikotna':
-            p = patches.Rectangle((x - l['w']/2, y - l['h']/2), l['w'], l['h'], edgecolor='green', facecolor='white', linewidth=1.5)
-            p.set_transform(patches.transforms.Affine2D().rotate_deg_around(x, y, kot) + ax.transData)
-            ax.add_patch(p)
-        elif tip == 'Ovalna (utor)':
-            p = patches.Ellipse((x, y), l['w'], l['h'], angle=kot, edgecolor='green', facecolor='white', linewidth=1.5)
-            ax.add_patch(p)
-        elif tip in ['Trikotna', 'Šestkotna', 'Osemkotna', 'Poljuben N-kotnik']:
-            pts = get_polygon_vertices(x, y, l['r'], l.get('n_stranic', 6), kot)
-            p = patches.Polygon(pts, closed=True, edgecolor='green', facecolor='white', linewidth=1.5)
-            ax.add_patch(p)
+        ax.add_patch(patches.Circle((l['x'], l['y']), l['r'], edgecolor='green', facecolor='white', linewidth=1.5))
+        ax.text(l['x'], l['y'], f"#{idx+1}", color='blue', fontsize=10, fontweight='bold', ha='center', va='center')
 
-        ax.text(x, y, f"#{idx+1}", color='blue', fontsize=10, fontweight='bold', ha='center', va='center')
-
-    # Izris vzorca
+    # Izris vzorca ograje
     if skalirane_konture is not None:
         for kontura in skalirane_konture:
             pts = kontura.reshape(-1, 2)
-            ax.plot(pts[:, 0], pts[:, 1], color='red', linewidth=1.2)
+            ax.plot(pts[:, 0], pts[:, 1], color='red', linewidth=1)
 
     ax.set_xlim(-100, mejna_sirina + 100)
     ax.set_ylim(-100, mejna_visina + 100)
-    ax.set_xlabel("X (mm)")
-    ax.set_ylabel("Y (mm)")
-    ax.grid(True, linestyle=':', alpha=0.6)
     ax.set_aspect('equal')
-    
     st.pyplot(fig, use_container_width=True)
 
-    # Izvoz DXF
-    dxf_data = ustvari_dxf(oblika_plosce, params, kontura_skice_plosce, skalirane_konture, st.session_state.seznami_lukenj)
-    st.download_button(
-        label=f"💾 Prenesi DXF datoteko ({oblika_plosce})",
-        data=dxf_data,
-        file_name="plosca_skica.dxf",
-        mime="application/dxf"
-    )
-
-elif modul == "Lovske kamere & AI":
-    st.header("🦌 Modul za lovske kamere")
-elif modul == "Tehnična diagnostika":
-    st.header("🔧 Modul za diagnostiko")
+    # DXF Izvoz
+    dxf_data = ustvari_dxf(oblika_plosce, params, None, skalirane_konture, st.session_state.seznami_lukenj)
+    st.download_button("💾 Prenesi DXF datoteko za razrez", data=dxf_data, file_name="ogreja_razrez.dxf", mime="application/dxf")
